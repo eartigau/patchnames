@@ -30,7 +30,12 @@ def main():
 
     sub.add_parser('init-config', help='Create a default config at ~/.config/patchnames/config.json.')
 
-    args = parser.parse_args()
+    argv = sys.argv[1:]
+    if len(argv) >= 2 and argv[0] == 'time-offset' and argv[1] not in ('-h', '--help'):
+        # The offset value ("+=HH:MM:SS" / "-=HH:MM:SS") starts with a dash,
+        # which argparse would otherwise mistake for an option flag.
+        argv = [argv[0], '--'] + argv[1:]
+    args = parser.parse_args(argv)
 
     if args.cmd is None:
         patchnames()
@@ -45,3 +50,7 @@ def main():
     else:
         parser.print_help()
         sys.exit(1)
+
+
+if __name__ == '__main__':
+    main()
