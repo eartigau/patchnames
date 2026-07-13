@@ -12,7 +12,11 @@ def main():
     )
     sub = parser.add_subparsers(dest='cmd')
 
-    sub.add_parser('nef-to-dng', help='Convert Nikon Z50 II NEF files to DNG.')
+    p_nef = sub.add_parser('nef-to-dng', help='Convert Nikon Z50 II NEF files to DNG.')
+    p_nef.add_argument(
+        '--convert-without-jpg', action='store_true',
+        help='Also convert NEF files that have no JPG companion (off by default).',
+    )
 
     p_offset = sub.add_parser('time-offset', help='Shift EXIF timestamps by a fixed offset.')
     p_offset.add_argument('glob', help='Glob pattern, e.g. "*.NEF"')
@@ -31,7 +35,7 @@ def main():
     if args.cmd is None:
         patchnames()
     elif args.cmd == 'nef-to-dng':
-        nef_to_dng()
+        nef_to_dng(convert_without_jpg=args.convert_without_jpg)
     elif args.cmd == 'time-offset':
         time_offset(args.glob, args.offset)
     elif args.cmd == 'patchdate':

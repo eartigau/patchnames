@@ -111,8 +111,12 @@ def get_exif(file, exif_folder=None):
 # Workflows
 # ---------------------------------------------------------------------------
 
-def nef_to_dng():
-    """Convert Nikon Z50 II NEF files in the current directory to DNG."""
+def nef_to_dng(convert_without_jpg=False):
+    """Convert Nikon Z50 II NEF files in the current directory to DNG.
+
+    convert_without_jpg: if False (default), NEF files with no JPG companion
+        are left alone. Pass True to also convert those.
+    """
     dng_converter = _cfg_get()['dng_converter']
     if not os.path.isfile(dng_converter):
         print('Adobe DNG Converter not found -- skipping NEF->DNG conversion.')
@@ -138,6 +142,10 @@ def nef_to_dng():
         base = os.path.splitext(nef)[0]
         if os.path.isfile(base + '.jpg') or os.path.isfile(base + '.JPG'):
             print(f'  JPG companion exists for {nef} -- skipping DNG conversion.')
+            continue
+
+        if not convert_without_jpg:
+            print(f'  No JPG companion for {nef} -- skipping DNG conversion (use --convert-without-jpg to force).')
             continue
 
         cmd = f'"{dng_converter}" -d . -o "{dng}" "{nef}"'
