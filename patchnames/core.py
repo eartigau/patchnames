@@ -176,28 +176,31 @@ def time_offset(search_string, offset_h=None):
 
     for i, fic in enumerate(fics):
         print(f'[{i:5d}/{len(fics):5d}]  {fic}')
-        cmd = (
-            f'exiftool -EXIF:DateTimeOriginal{offset_h} '
-            f'-EXIF:CreateDate{offset_h} '
-            f'-EXIF:ModifyDate{offset_h} {fic}'
-        )
-        print(f'    {cmd}')
-        os.system(cmd)
+        try:
+            cmd = (
+                f'exiftool -EXIF:DateTimeOriginal{offset_h} '
+                f'-EXIF:CreateDate{offset_h} '
+                f'-EXIF:ModifyDate{offset_h} {fic}'
+            )
+            print(f'    {cmd}')
+            os.system(cmd)
 
-        hdr = get_exif(fic)
-        target = os.path.join('offset_files', hdr['REFERENCE NAME'])
+            hdr = get_exif(fic)
+            target = os.path.join('offset_files', hdr['REFERENCE NAME'])
 
-        if fic != hdr['REFERENCE NAME']:
-            if not os.path.isfile(target):
-                shutil.move(fic, target)
-                print(f'    moved -> {target}')
-            elif os.stat(fic).st_size == os.stat(target).st_size:
-                os.remove(fic)
-                print(f'    deleted duplicate: {fic}')
+            if fic != hdr['REFERENCE NAME']:
+                if not os.path.isfile(target):
+                    shutil.move(fic, target)
+                    print(f'    moved -> {target}')
+                elif os.stat(fic).st_size == os.stat(target).st_size:
+                    os.remove(fic)
+                    print(f'    deleted duplicate: {fic}')
+                else:
+                    print(f'    {hdr["REFERENCE NAME"]} already exists with different size -- skipped.')
             else:
-                print(f'    {hdr["REFERENCE NAME"]} already exists with different size -- skipped.')
-        else:
-            print('    filename unchanged.')
+                print('    filename unchanged.')
+        except Exception as exc:
+            print(f'    ERROR processing {fic}: {exc}')
 
     os.makedirs('original_files', exist_ok=True)
     os.system('mv *_original original_files 2>/dev/null')
