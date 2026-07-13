@@ -124,6 +124,22 @@ def nef_to_dng(convert_without_jpg=False):
 
     nef_files = glob.glob('*.NEF') + glob.glob('*.nef')
     for nef in nef_files:
+        base = os.path.splitext(nef)[0]
+
+        dng = base + '.dng'
+        if os.path.isfile(dng):
+            print(f'  {dng} already exists -- skipping.')
+            continue
+
+        has_jpg = os.path.isfile(base + '.jpg') or os.path.isfile(base + '.JPG')
+        if has_jpg:
+            print(f'  JPG companion exists for {nef} -- skipping DNG conversion.')
+            continue
+
+        if not convert_without_jpg:
+            print(f'  No JPG companion for {nef} -- skipping DNG conversion (use --convert-without-jpg to force).')
+            continue
+
         try:
             hdr = get_exif(nef)
         except Exception as exc:
@@ -132,20 +148,6 @@ def nef_to_dng(convert_without_jpg=False):
 
         model = hdr.get('CAMERAMODELNAME', '')
         if not any(m in model for m in ['Z50_2', 'Z 50 II']):
-            continue
-
-        dng = os.path.splitext(nef)[0] + '.dng'
-        if os.path.isfile(dng):
-            print(f'  {dng} already exists -- skipping.')
-            continue
-
-        base = os.path.splitext(nef)[0]
-        if os.path.isfile(base + '.jpg') or os.path.isfile(base + '.JPG'):
-            print(f'  JPG companion exists for {nef} -- skipping DNG conversion.')
-            continue
-
-        if not convert_without_jpg:
-            print(f'  No JPG companion for {nef} -- skipping DNG conversion (use --convert-without-jpg to force).')
             continue
 
         cmd = f'"{dng_converter}" -d . -o "{dng}" "{nef}"'
