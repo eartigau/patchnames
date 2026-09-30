@@ -3,6 +3,7 @@ import sys
 
 from .core import patchnames, time_offset, patchdate, nef_to_dng
 from . import config as _config
+from .keywords import keywords
 
 
 def main():
@@ -10,7 +11,31 @@ def main():
         prog='patchnames',
         description='Rename and archive photo/video files using EXIF metadata.',
     )
+    parser.add_argument(
+        '--keywords', action='store_true',
+        help='Describe the bird photos with Claude before renaming them '
+             '(or set "keywords_auto": true in the config).',
+    )
     sub = parser.add_subparsers(dest='cmd')
+
+    p_kw = sub.add_parser(
+        'keywords',
+        help='Describe the bird photos with Claude: species (French, Latin), habitat, '
+             'description, written into the files.',
+    )
+    p_kw.add_argument('--gap', type=float, default=None,
+                      help='Seconds without a shot that start a new sequence (config, 30).')
+    p_kw.add_argument('--force', action='store_true',
+                      help='Describe again the photos that already have a title.')
+    p_kw.add_argument('--all-lenses', action='store_true',
+                      help='Every photo, not only those taken with a bird lens.')
+    p_kw.add_argument('--dry-run', action='store_true',
+                      help="Show Claude's answers without writing anything.")
+    p_kw.add_argument('--no-backup', action='store_true',
+                      help='Do not keep the originals as <file>_original.')
+    p_kw.add_argument('--instructions', default=None,
+                      help='The MD file of explanations (~/.config/patchnames/keywords.md).')
+    p_kw.add_argument('--model', default=None, help='The Claude model (default of claude).')
 
     p_nef = sub.add_parser('nef-to-dng', help='Convert Nikon Z50 II NEF files to DNG.')
     p_nef.add_argument(
@@ -38,7 +63,13 @@ def main():
     args = parser.parse_args(argv)
 
     if args.cmd is None:
+        if args.keywords or _config.load().get('keywords_auto'):
+            keywords()
         patchnames()
+    elif args.cmd == 'keywords':
+        keywords(gap=args.gap, force=args.force, all_lenses=args.all_lenses,
+                 dry_run=args.dry_run, backup=not args.no_backup,
+                 instructions=args.instructions, model=args.model)
     elif args.cmd == 'nef-to-dng':
         nef_to_dng(convert_without_jpg=args.convert_without_jpg)
     elif args.cmd == 'time-offset':

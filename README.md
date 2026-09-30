@@ -45,6 +45,41 @@ patchnames time-offset '*.NEF'      # prompts interactively
 patchnames patchdate '*.jpg'        # prompts for YYMMDD
 ```
 
+
+## Keywords with Claude
+
+`patchnames keywords` describes the bird photos of the current directory
+with Claude and writes the result into the files themselves (EXIF, IPTC and
+XMP): a title, the species (French and Latin names), the habitat, a short
+description in French, and a Lightroom hierarchy (Espèce, Espèce latine,
+Habitat). An uncertain identification gets the keyword
+`identification à confirmer`, with the candidates in the description.
+
+```bash
+patchnames keywords              # the bird photos not yet described
+patchnames keywords --dry-run    # show Claude's answers, write nothing
+patchnames --keywords            # describe, then rename and archive as usual
+```
+
+- **What is looked at:** only the photos taken with a bird lens (config
+  `bird_lenses`; `--all-lenses` for all), and not the ones that already have a
+  title (`--force` to redo them).
+- **Sequences:** the photos are grouped into sequences (a new one after 30 s
+  without a shot, `--gap`). Claude looks at the middle frame of each sequence
+  and at a contact sheet of all its frames, and its answer is written into every
+  frame: a burst of a hundred frames costs one call.
+- **Your explanations:** `~/.config/patchnames/keywords.md` (written on the
+  first run, yours to edit) is passed to Claude as it is: region, naming
+  conventions (French names of the Québec list, Latin names of eBird/Clements),
+  how prudent to be, habitat words, description style.
+- **Needs** the `claude` command (Claude Code) logged in: it runs in print
+  mode, allowed only to read the images (`--model` to pick a model). About 20 s
+  per sequence.
+- **Backups:** exiftool keeps each original as `<file>_original`
+  (`--no-backup` to skip; `exiftool -delete_original .` removes them later).
+- Set `"keywords_auto": true` in the config to describe before every
+  `patchnames` run.
+
 ## Configuration
 
 `~/.config/patchnames/config.json`:

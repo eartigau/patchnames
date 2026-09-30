@@ -7,7 +7,7 @@ name = "patchnames"
 version = "0.1.0"
 description = "Rename and archive photo/video files using EXIF metadata"
 requires-python = ">=3.8"
-dependencies = []
+dependencies = ["pillow"]
 
 [project.scripts]
 patchnames = "patchnames.cli:main"

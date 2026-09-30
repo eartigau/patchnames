@@ -18,6 +18,11 @@ DEFAULTS = {
         'MA': ['DMC-FZ200'],
     },
     'bird_lenses': ['200-500mm', '300mm'],
+    # patchnames keywords: Claude describes the bird photos (keywords.py)
+    'keywords_instructions': str(Path.home() / '.config' / 'patchnames' / 'keywords.md'),
+    'keywords_gap': 30,
+    'keywords_model': None,
+    'keywords_auto': False,
 }
 
 
@@ -42,3 +47,5 @@ def init():
         json.dump(DEFAULTS, f, indent=2)
     print(f'Default config written to {CONFIG_PATH}')
     print('Edit it to match your setup.')
+    from .keywords import write_template
+    write_template()
