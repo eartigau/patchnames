@@ -14,3 +14,6 @@ patchnames = "patchnames.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["patchnames*"]
+
+[tool.setuptools.package-data]
+patchnames = ["*.md"]
