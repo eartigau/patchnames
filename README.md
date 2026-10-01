@@ -65,9 +65,12 @@ patchnames --keywords            # describe, then rename and archive as usual
   `bird_lenses`; `--all-lenses` for all), and not the ones that already have a
   title (`--force` to redo them).
 - **Sequences:** the photos are grouped into sequences (a new one after 30 s
-  without a shot, `--gap`). Claude looks at the middle frame of each sequence
-  and at a contact sheet of all its frames, and its answer is written into every
-  frame: a burst of a hundred frames costs one call.
+  without a shot, `--gap`). Claude looks at the middle frame of each sequence,
+  at a crop of it at full resolution around the camera's focus point (where a
+  distant bird is large enough to identify; the centre of the frame when the
+  file has no focus data) and at a contact sheet of all its frames, and its
+  answer is written into every frame: a burst of a hundred frames costs one
+  call.
 - **Your explanations:** `~/.config/patchnames/keywords.md` (written on the
   first run, yours to edit) is passed to Claude as it is: region, naming
   conventions (French names of the Québec list, Latin names of eBird/Clements),

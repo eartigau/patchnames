@@ -9,9 +9,11 @@ How it works:
    'bird_lenses'; --all-lenses for every photo) and not yet described (no
    XMP title; --force to redo them) are grouped into sequences: a new
    sequence after `gap` seconds without a shot;
-2. for each sequence, a contact sheet of its frames (the frame numbers
-   written on them) and its middle frame at 1400 px are made in a temporary
-   folder;
+2. for each sequence, its middle frame at 1400 px, a crop of that frame at
+   full resolution around the camera's focus point (Nikon AFAreaXPosition and
+   AFAreaYPosition; the centre of the frame without them), where a distant
+   bird is large enough to identify, and a contact sheet of its frames (the
+   frame numbers written on them) are made in a temporary folder;
 3. the claude command line, in print mode and allowed to read files only,
    looks at them, follows the explanations of an MD file
    (~/.config/patchnames/keywords.md, yours to edit: region, names,
@@ -99,9 +101,13 @@ PROMPT = """Tu décris une séquence de photos d'oiseaux pour des mots-clés.
 Lis ces images avec l'outil Read :
 {images}
 
-La première est la vue du milieu de la séquence, en grand ; les suivantes
-sont des planches contact de toutes les vues de la séquence (le numéro de
-chaque vue est écrit dessus), pour vérifier qu'il s'agit du même sujet.
+La première est la vue du milieu de la séquence, réduite ; la deuxième est
+un agrandissement de cette vue à pleine résolution autour du point de mise
+au point de l'appareil, là où se trouve en général l'oiseau (regarde-la
+attentivement : un oiseau lointain n'est souvent visible que là) ; les
+suivantes sont des planches contact de toutes les vues de la séquence (le
+numéro de chaque vue est écrit dessus), pour vérifier qu'il s'agit du même
+sujet.
 
 La séquence : {count} vues, du {start} au {end}{lens}.
 
@@ -146,7 +152,9 @@ def write_template(path=None, quiet=False):
 def _exif(files):
     """time, lens and title of each file (one exiftool call)"""
     out = subprocess.run(['exiftool', '-j', '-q', '-DateTimeOriginal', '-LensModel',
-                          '-LensID', '-LensInfo', '-Lens', '-XMP-dc:Title'] + files,
+                          '-LensID', '-LensInfo', '-Lens', '-XMP-dc:Title',
+                          '-AFAreaXPosition', '-AFAreaYPosition', '-AFImageWidth',
+                          '-AFImageHeight'] + files,
                          capture_output=True, text=True).stdout
     rows = json.loads(out) if out.strip() else []
     return {os.path.basename(row['SourceFile']): row for row in rows}
@@ -200,16 +208,35 @@ def _image(path, big):
     return Image.open(out).convert('RGB')
 
 
-def _pictures(names, tmpdir, index):
-    """the middle frame at 1400 px and the contact sheets of a sequence"""
+def _focus_crop(img, row):
+    """a 1400 x 933 crop at full resolution around the camera's focus point
+    (the centre of the frame when the file does not record it)"""
+    width, height = img.size
+    try:
+        cx = float(row['AFAreaXPosition']) / float(row['AFImageWidth']) * width
+        cy = float(row['AFAreaYPosition']) / float(row['AFImageHeight']) * height
+    except (KeyError, TypeError, ValueError, ZeroDivisionError):
+        cx, cy = width / 2, height / 2
+    half_w, half_h = min(700, width / 2), min(467, height / 2)
+    cx = min(max(cx, half_w), width - half_w)
+    cy = min(max(cy, half_h), height - half_h)
+    return img.crop((int(cx - half_w), int(cy - half_h), int(cx + half_w), int(cy + half_h)))
+
+
+def _pictures(names, tmpdir, index, rows):
+    """the middle frame at 1400 px, a crop around its focus point at full
+    resolution, and the contact sheets of a sequence"""
     from PIL import Image, ImageDraw
     paths = []
     middle = names[len(names) // 2]
-    rep = _image(middle, big=True)
+    full = _image(middle, big=True)
+    path = os.path.join(tmpdir, f'seq{index:03d}_focus.jpg')
+    _focus_crop(full, rows.get(middle, {})).save(path, quality=88)
+    rep = full.copy()
     rep.thumbnail((1400, 1400))
-    path = os.path.join(tmpdir, f'seq{index:03d}_middle.jpg')
-    rep.save(path, quality=88)
-    paths.append(path)
+    rep_path = os.path.join(tmpdir, f'seq{index:03d}_middle.jpg')
+    rep.save(rep_path, quality=88)
+    paths += [rep_path, path]
     if len(names) < 2:
         return paths
     if len(names) <= 2 * SHEET_MAX:
@@ -332,7 +359,7 @@ def keywords(gap=None, force=False, all_lenses=False, dry_run=False, backup=True
         for index, names in enumerate(groups):
             print(f'\n[{index + 1}/{len(groups)}] {names[0]} .. {names[-1]}  ({len(names)} photos)')
             try:
-                images = _pictures(names, tmpdir, index)
+                images = _pictures(names, tmpdir, index, rows)
                 answer = _ask_claude(images, names, rows, explanations, tmpdir, model)
             except Exception as exc:
                 print(f'    ERROR: {exc}')
