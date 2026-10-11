@@ -8,7 +8,8 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
-const FIELDS = ["q", "species", "place", "region", "year", "since", "until", "topic", "kind", "flag", "sort"];
+const FIELDS = ["section", "q", "species", "person", "place", "region", "year", "since", "until", "topic",
+                "eye", "clear", "level", "flag", "sort"];
 const PAGE = 60;
 const state = { items: [], offset: 0, done: false, loading: false, token: 0, current: -1, checklist: "", total: 0 };
 // the batch of the button above the results: how many finished sequences
@@ -34,6 +35,21 @@ const image = (kind, name) => `/${kind}/${encodeURIComponent(name)}`;
 
 function region(photo) {
   return [photo.county, photo.state, photo.country_name].filter(Boolean).join(", ");
+}
+
+/* ── Sections: bird photos, family photos, the rest ─────────────────── */
+
+// show the section chosen and the filters that go with it; a filter that
+// leaves the form is emptied (it would go on filtering unseen)
+function setSection(section, quiet) {
+  $("section").value = section;
+  for (const tab of $("sections").querySelectorAll(".tab")) tab.classList.toggle("on", tab.dataset.section === section);
+  for (const label of $("filters").querySelectorAll("[data-for]")) {
+    const shown = !section || label.dataset.for === section;
+    label.hidden = !shown;
+    if (!shown && !quiet) for (const input of label.querySelectorAll("input:not([type=checkbox]), select")) input.value = "";
+  }
+  if (!quiet) load(true);
 }
 
 /* ── Search ─────────────────────────────────────────────────────────── */
@@ -226,6 +242,7 @@ function showChecklistChip() {
 /* ── Viewer ─────────────────────────────────────────────────────────── */
 
 function show(name) {
+  state.shown = name;       // the frame on screen: the one the file buttons act on
   $("viewerImg").src = image("preview", name);
   for (const img of $("viewerStrip").children) img.classList.toggle("on", img.dataset.name === name);
 }
@@ -271,13 +288,13 @@ async function step(by) {
   if (next !== state.current) openViewer(next);
 }
 
-async function act(what, name, box) {
+async function act(what, name, box, app) {
   box.textContent = "";
   try {
     const reply = await fetch("/api/" + what, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Patchdoc": "1" },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name, app: Boolean(app) }),
     });
     const data = await reply.json();
     if (data.error) box.textContent = data.error;
@@ -364,6 +381,9 @@ function info(photo) {
   }
   if (photo.on_checklist === 1) badges.push(badge("sur la liste eBird", "good"));
   if (photo.on_checklist === 0) badges.push(badge("absente de la liste eBird", "alert"));
+  for (const [key, label] of [["eye", "œil net"], ["clear", "dégagé"], ["level", "hauteur d'œil"]]) {
+    if (photo[key]) badges.push(badge(`${label} ${photo[key]}/5`, photo[key] >= 4 ? "good" : photo[key] <= 2 ? "warn" : ""));
+  }
   if (photo.topic) badges.push(badge(photo.topic));
   if (photo.seq_n > 1) badges.push(badge(photo.seq_n + " vues"));
   if (badges.length) out.push(el("div", { class: "badges" }, badges));
@@ -439,9 +459,13 @@ function info(photo) {
   const said = el("p", { class: "mono" });
   out.push(el("h3", { text: "Fichier" }), el("p", { class: "mono", text: photo.path || photo.name }));
   if (photo.reachable !== false) {
+    // the buttons act on the frame on screen, which may not be the one of the tile
+    const shown = () => state.shown || photo.name;
     out.push(el("div", { class: "actions" },
-      el("button", { class: "pill", type: "button", text: "Afficher dans le Finder", onclick: () => act("reveal", photo.name, said) }),
-      el("button", { class: "pill", type: "button", text: "Ouvrir", onclick: () => act("open", photo.name, said) })),
+      el("button", { class: "pill", type: "button", text: "Afficher dans le Finder", onclick: () => act("reveal", shown(), said) }),
+      el("button", { class: "pill", type: "button", text: "Ouvrir", onclick: () => act("open", shown(), said) }),
+      state.rawApp && /\.(nef|dng)$/i.test(photo.name) && el("button", { class: "pill", type: "button",
+        text: "Ouvrir avec " + state.rawApp, onclick: () => act("open", shown(), said, true) })),
       said);
   } else {
     out.push(el("p", { class: "mono", text: "Hors d'atteinte pour l'instant : le disque d'archive n'est pas monté." }));
@@ -470,6 +494,8 @@ async function start() {
     + (facets.ebird ? ` · données eBird du ${facets.ebird.slice(0, 10)}` : " · pas de données eBird");
   // (a server started before an update of patchdoc says less: relaunch it)
   state.claude = facets.claude;
+  state.rawApp = facets.raw_app;
+  for (const [name] of facets.people || []) $("personList").append(el("option", { value: name }));
   const store = facets.thumbs && facets.thumbs.total
     ? ` · vignettes : ${number(facets.thumbs.have)} sur ${number(facets.thumbs.total)}`
       + (facets.thumbs.filling ? " (les autres se font en arrière-plan)" : "")
@@ -503,13 +529,15 @@ async function start() {
   // the search of the address bar, to come back to it
   const asked = new URLSearchParams(location.search);
   for (const key of FIELDS) if (asked.get(key)) $(key).value = asked.get(key);
+  setSection($("section").value, true);
+  for (const tab of $("sections").querySelectorAll(".tab")) tab.addEventListener("click", () => setSection(tab.dataset.section));
   state.checklist = asked.get("checklist") || "";
   showChecklistChip();
 
   let timer = null;
   const soon = () => { clearTimeout(timer); timer = setTimeout(() => load(true), 250); };
   for (const key of FIELDS) {
-    $(key).addEventListener($(key).tagName === "SELECT" || $(key).type === "date" ? "change" : "input", soon);
+    if (key !== "section") $(key).addEventListener($(key).tagName === "SELECT" || $(key).type === "date" ? "change" : "input", soon);
   }
   $("listed").addEventListener("change", () => load(true));
   $("filters").addEventListener("submit", (event) => { event.preventDefault(); load(true); });
@@ -518,7 +546,7 @@ async function start() {
     for (const key of FIELDS) $(key).value = key === "sort" ? "new" : "";
     state.checklist = "";
     showChecklistChip();
-    load(true);
+    setSection("");
   });
 
   $("batchGo").addEventListener("click", batchGo);

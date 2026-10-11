@@ -59,7 +59,9 @@ from .ebird import country_name
 STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'gui')
 #: the filters of /api/search (see photoindex._where)
 FILTERS = ('q', 'species', 'place', 'region', 'year', 'since', 'until', 'topic', 'kind',
-           'flag', 'checklist', 'sort')
+           'flag', 'checklist', 'sort', 'section', 'person', 'eye', 'clear', 'level')
+#: the extensions of the raw files, which get the "Ouvrir avec" button
+RAW = ('nef', 'dng')
 #: images made from the photos at the same time, at most (the archive may be
 #:  a slow network drive)
 _making = threading.Semaphore(4)
@@ -94,6 +96,15 @@ def _public(row):
     out['reachable'] = bool(full)
     out['path'] = full or row.get('path')
     return out
+
+
+def _raw_app():
+    """the application that opens the raw files (config 'raw_app'), None if
+    it is not on this machine"""
+    name = _config_module.load().get('raw_app')
+    places = ('/Applications', os.path.expanduser('~/Applications'))
+    return name if name and any(os.path.isdir(os.path.join(place, name + '.app'))
+                                for place in places) else None
 
 
 def _archive():
@@ -328,7 +339,7 @@ class Handler(BaseHTTPRequestHandler):
                 cfg = _config_module.load()
                 each = _cost_guess(cfg.get('keywords_model'), cfg.get('doc_effort'))[0]
                 facets = dict(photoindex.facets(db), index=photoindex.index_dir(),
-                              archive=_archive(), thumbs=dict(_store),
+                              archive=_archive(), thumbs=dict(_store), raw_app=_raw_app(),
                               claude={'each': each, 'spent': _spent['total'],
                                       'budget': float(cfg.get('doc_budget') or 0)})
                 db.close()
@@ -415,9 +426,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(404, {'error': "le fichier est hors d'atteinte (le disque d'archive "
                                           'est-il monté ?)'})
                 return
+            how = ['-R'] if self.path == '/api/reveal' else []
+            if body.get('app') and _raw_app() and full.lower().endswith(RAW):
+                how = ['-a', _raw_app()]        # the application of the config, never one asked for
             if sys.platform == 'darwin':
-                subprocess.run(['open'] + (['-R'] if self.path == '/api/reveal' else []) + [full],
-                               capture_output=True)
+                subprocess.run(['open'] + how + [full], capture_output=True)
             self._send(200, {'ok': True})
         except Exception as exc:
             self._send(500, {'error': str(exc)})

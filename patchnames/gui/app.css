@@ -27,6 +27,34 @@
 
 /* ── Filters ────────────────────────────────────────────────────────── */
 
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.tab {
+  padding: 7px 18px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--muted);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.tab:hover,
+.tab.on {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.tab.on {
+  background: rgba(98, 194, 255, 0.12);
+}
+
 .field {
   width: 100%;
   padding: 8px 10px;

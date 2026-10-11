@@ -46,3 +46,19 @@ est écrit ici guide l'identification et la rédaction.
 
 - Au plus trois, utiles pour retrouver les photos : comportement (en vol,
   alimentation), plumage (juvénile, nuptial), groupe (limicole, rapace).
+
+## Famille et animaux
+
+- Nommez ici les animaux de la famille et ce qui permet de les reconnaître
+  (par exemple : « le chien blanc qui accompagne la famille s'appelle
+  ... »), pour que leur nom figure dans le titre, la description et les
+  mots-clés.
+- Ne pas deviner le nom des personnes d'après leur visage : leurs noms
+  viennent des visages nommés par le photographe dans la page de recherche,
+  et sont donnés avec la photo quand ils sont connus.
+
+## Photos autres que les oiseaux
+
+- Titre court (8 mots au plus) qui dit le sujet et, s'il se reconnaît, le
+  lieu ou l'occasion (« Souper d'anniversaire au chalet »).
+- Description : qui ou quoi, où, ce qui se passe ; pas de liste d'objets.

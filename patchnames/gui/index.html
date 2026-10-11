@@ -37,12 +37,23 @@
   <main class="layout">
     <section class="card span-3">
       <form id="filters" autocomplete="off">
+        <div class="tabs" id="sections">
+          <button type="button" class="tab on" data-section="">Tout</button>
+          <button type="button" class="tab" data-section="oiseaux">Oiseaux</button>
+          <button type="button" class="tab" data-section="famille">Famille</button>
+          <button type="button" class="tab" data-section="autre">Autre</button>
+          <input id="section" type="hidden" value="">
+        </div>
         <input id="q" class="field big" type="search"
                placeholder="Recherche : une esp&egrave;ce, un lieu, &laquo; en vol &raquo;, &laquo; juv&eacute;nile &raquo;, un nom de fichier&hellip;">
         <div class="fields">
-          <label>Esp&egrave;ce
+          <label data-for="oiseaux">Esp&egrave;ce
             <input id="species" class="field" list="speciesList" placeholder="toutes">
             <datalist id="speciesList"></datalist>
+          </label>
+          <label data-for="famille">Personne
+            <input id="person" class="field" list="personList" placeholder="toutes">
+            <datalist id="personList"></datalist>
           </label>
           <label>Lieu
             <input id="place" class="field" list="placeList" placeholder="tous">
@@ -60,15 +71,20 @@
           <label>Au
             <input id="until" class="field" type="date">
           </label>
-          <label>Sujet
+          <label data-for="autre">Sujet
             <select id="topic" class="field"><option value="">tous</option></select>
           </label>
-          <label>Objectif
-            <select id="kind" class="field">
-              <option value="">tous</option>
-              <option value="birds">t&eacute;l&eacute;objectif (photos d&rsquo;oiseaux)</option>
-              <option value="others">autres</option>
-            </select>
+          <label data-for="oiseaux" title="Netteté de la mise au point sur l'œil, de 1 à 5">&OElig;il net
+            <select id="eye" class="field"><option value="">toutes les notes</option>
+              <option value="3">3 et plus</option><option value="4">4 et plus</option><option value="5">5</option></select>
+          </label>
+          <label data-for="oiseaux" title="À quel point l'oiseau est dégagé, de 1 à 5">D&eacute;gag&eacute;
+            <select id="clear" class="field"><option value="">toutes les notes</option>
+              <option value="3">3 et plus</option><option value="4">4 et plus</option><option value="5">5</option></select>
+          </label>
+          <label data-for="oiseaux" title="À quel point la photo est prise à la hauteur de l'œil, de 1 à 5">Hauteur d&rsquo;&oelig;il
+            <select id="level" class="field"><option value="">toutes les notes</option>
+              <option value="3">3 et plus</option><option value="4">4 et plus</option><option value="5">5</option></select>
           </label>
           <label>Afficher
             <select id="flag" class="field">
@@ -89,7 +105,7 @@
           </label>
         </div>
         <div class="options">
-          <label class="check"><input id="listed" type="checkbox" checked>
+          <label class="check" data-for="oiseaux"><input id="listed" type="checkbox" checked>
             Avec une esp&egrave;ce, montrer aussi les photos prises pendant une liste eBird qui la
             contient (esp&egrave;ce non identifi&eacute;e sur la photo)</label>
           <span id="checklistChip" class="chip active" hidden></span>

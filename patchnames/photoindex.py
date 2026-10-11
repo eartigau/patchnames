@@ -44,6 +44,10 @@ COLUMNS = ('name', 'path', 'stem', 'ext',
            'seq', 'seq_n', 'rep',
            'title', 'topic', 'description', 'species', 'latin', 'habitat', 'keywords',
            'certainty',
+           'eye', 'clear', 'level',    # a bird photo, 1 to 5: the focus on the eye, how
+                                       #   clear of branches the bird is, how close to eye level
+           'people',           # the people named in the photo
+           'faces',            # how many faces were found in it; NULL if nobody looked
            'note',             # what Claude says of the photo against the checklist
            'checklist',        # eBird submission ID
            'match',            # 'inside' or 'near' the hours of the checklist
@@ -54,7 +58,8 @@ COLUMNS = ('name', 'path', 'stem', 'ext',
            'place_norm')
 
 TYPES = {'clock_offset': 'REAL', 'zone': 'REAL', 'focal': 'REAL', 'lat': 'REAL', 'lon': 'REAL',
-         'bird': 'INTEGER', 'seq_n': 'INTEGER', 'rep': 'INTEGER', 'on_checklist': 'INTEGER'}
+         'bird': 'INTEGER', 'seq_n': 'INTEGER', 'rep': 'INTEGER', 'on_checklist': 'INTEGER',
+         'eye': 'INTEGER', 'clear': 'INTEGER', 'level': 'INTEGER', 'faces': 'INTEGER'}
 
 PHOTOS = ('(id INTEGER PRIMARY KEY, '
           + ', '.join(f'{column} {TYPES.get(column, "TEXT")}' for column in COLUMNS)
@@ -85,7 +90,10 @@ CREATE TABLE IF NOT EXISTS meta {TABLES['meta']};
 
 #: the kinds of tags, and the column of a photo each comes from
 TAGS = (('species', 'species'), ('latin', 'latin'), ('habitat', 'habitat'),
-        ('keyword', 'keywords'), ('topic', 'topic'))
+        ('keyword', 'keywords'), ('topic', 'topic'), ('person', 'people'))
+#: the sections of the search page: bird photos, photos with people, the rest
+BIRDS = "(p.bird = 1 OR p.topic = 'oiseau')"
+FAMILY = "(p.topic = 'personnes' OR COALESCE(p.people, '') != '' OR COALESCE(p.faces, 0) > 0)"
 SEP = '; '
 
 
@@ -317,6 +325,7 @@ def _derive(db, names):
                                (name, kind, value.strip(), fold(value)))
         text = ' '.join(str(row[key] or '') for key in (
             'title', 'topic', 'description', 'species', 'latin', 'habitat', 'keywords', 'note',
+            'people',
             'location', 'county', 'state', 'checklist', 'camera', 'lens', 'name'))
         db.execute('INSERT INTO search (rowid, text) VALUES (?, ?)',
                    (row['id'], text + ' ' + country_name(row['country'] or '')))
@@ -360,8 +369,22 @@ def _fts(text):
 
 
 def _where(q='', species='', listed=False, place='', region='', year='', since='', until='',
-           topic='', kind='', flag='', checklist='', **_):
+           topic='', kind='', flag='', checklist='', section='', person='', eye='', clear='',
+           level='', **_):
     where, args = ['p.rep = 1'], []
+    if section == 'oiseaux':
+        where.append(BIRDS)
+    elif section == 'famille':
+        where.append(f'{FAMILY} AND NOT {BIRDS}')
+    elif section == 'autre':
+        where.append(f'NOT {FAMILY} AND NOT {BIRDS}')
+    if person:
+        where.append("p.name IN (SELECT name FROM tags WHERE kind = 'person' AND norm LIKE ?)")
+        args.append(f'%{fold(person)}%')
+    for column, least in (('eye', eye), ('clear', clear), ('level', level)):
+        if str(least).isdigit():
+            where.append(f'p.{column} >= ?')
+            args.append(int(least))
     if q and _fts(q):
         where.append('p.id IN (SELECT rowid FROM search WHERE search MATCH ?)')
         args.append(_fts(q))
@@ -456,6 +479,8 @@ def facets(db):
                        'WHERE rep = 1 AND y IS NOT NULL GROUP BY y ORDER BY y DESC'),
         'topics': count("SELECT topic, COUNT(*) FROM photos WHERE rep = 1 AND topic != '' "
                         'GROUP BY topic ORDER BY COUNT(*) DESC'),
+        'people': count("SELECT value, COUNT(*) FROM tags WHERE kind = 'person' "
+                        'GROUP BY value ORDER BY value COLLATE NOCASE'),
         'total': db.execute('SELECT COUNT(*) FROM photos').fetchone()[0],
         'described': db.execute('SELECT COUNT(*) FROM photos WHERE described IS NOT NULL').fetchone()[0],
         'ebird': (db.execute("SELECT value FROM meta WHERE key = 'ebird_asof'").fetchone() or [None])[0],

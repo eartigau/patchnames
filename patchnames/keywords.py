@@ -270,6 +270,8 @@ def _tags(answer):
     hier += [f'Habitat|{h}' for h in habitat if h]
     if topic:
         hier.append(f'Sujet|{topic}')
+    # more of the hierarchy, as the caller wants it (patchdoc: notes, people)
+    hier += list(answer.get('hierarchie') or [])
     title, desc = answer['titre'], answer['description']
     args = ['-charset', 'iptc=UTF8', '-codedcharacterset=utf8',
             f'-XMP-dc:Title={title}', f'-XMP-dc:Description={desc}',

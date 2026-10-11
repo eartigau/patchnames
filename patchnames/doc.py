@@ -75,13 +75,17 @@ GPS_KM = 2.0
 #: start of GPSAreaInformation in a file whose position is that of its eBird
 #:  checklist, written here
 GPS_MARK = 'eBird'
+#: the notes of a bird photo, 1 to 5: column of the index, key of Claude's
+#:  answer, name in the Lightroom hierarchy (Qualité|...), keyword
+NOTES = (('eye', 'oeil_net', 'Œil net', 'œil net'), ('clear', 'degage', 'Dégagement', 'dégagé'),
+         ('level', 'hauteur_oeil', "Hauteur d'œil", "hauteur d'œil"))
 
 #: what exiftool is asked of each photo
 FIELDS = ['-DateTimeOriginal', '-OffsetTimeOriginal', '-Model', '-LensModel', '-LensID',
           '-LensInfo', '-Lens', '-FocalLength#', '-GPSLatitude#', '-GPSLongitude#',
           '-GPSAreaInformation', '-AFAreaXPosition', '-AFAreaYPosition', '-AFImageWidth',
           '-AFImageHeight', '-XMP-dc:Title', '-XMP-dc:Description', '-XMP-dc:Subject',
-          '-XMP-lr:HierarchicalSubject', '-XMP-iptcExt:Event']
+          '-XMP-lr:HierarchicalSubject', '-XMP-iptcExt:Event', '-XMP-iptcExt:PersonInImage']
 
 #: a canonical name: YYMMDD_HHMMSS[_WHO]_NUM.ext
 NAME = re.compile(r'^(\d{6})_(\d{6})(?:_([A-Z]{2}))?_[^.]+\.(\w+)$')
@@ -115,6 +119,9 @@ Réponds par un objet JSON :
 - "description" : une ou deux phrases courtes en français, 40 mots au plus ;
 - "certitude" : celle de l'identification, "sûre", "probable" ou "à confirmer" ("sûre" s'il n'y a rien à identifier) ;
 - "autres_mots_cles" : au plus cinq mots-clés utiles pour retrouver la photo ;
+- "oeil_net" : pour un oiseau, la netteté de la mise au point sur son œil, de 1 à 5, jugée sur l'agrandissement à pleine résolution : 5 = œil parfaitement net (reflet et détail des plumes autour de l'œil), 3 = acceptable, 1 = flou ; null si l'œil ne se voit pas ou s'il n'y a pas d'oiseau ;
+- "degage" : pour un oiseau, à quel point il est dégagé, de 1 à 5 : 5 = entier et sans rien devant lui, 3 = en partie masqué, 1 = presque caché par des branches ou des feuilles ; null sans oiseau ;
+- "hauteur_oeil" : pour un oiseau, à quel point la photo est prise à la hauteur de son œil, de 1 à 5 : 5 = appareil à sa hauteur, 3 = angle modéré, 1 = forte plongée ou contre-plongée (oiseau haut dans un arbre ou dans le ciel, ou vu de dessus) ; null sans oiseau ;
 - "liste" : l'identifiant (S...) de la liste eBird à laquelle la séquence appartient, null s'il n'y en a pas ;
 - "note_ebird" : une phrase seulement si ce que tu vois ne s'accorde pas avec la liste eBird (espèce absente de la liste, autre espèce plus probable que celle notée) ; une chaîne vide "" quand la photo s'accorde avec la liste ou qu'il n'y a pas de liste."""
 
@@ -148,11 +155,14 @@ SCHEMA = {
         'description': {'type': 'string'},
         'certitude': {'type': 'string', 'enum': ['sûre', 'probable', 'à confirmer']},
         'autres_mots_cles': {'type': 'array', 'items': {'type': 'string'}},
+        'oeil_net': {'type': ['integer', 'null']},
+        'degage': {'type': ['integer', 'null']},
+        'hauteur_oeil': {'type': ['integer', 'null']},
         'liste': {'type': ['string', 'null']},
         'note_ebird': {'type': 'string'},
     },
     'required': ['titre', 'sujet', 'especes', 'habitat', 'description', 'certitude',
-                 'autres_mots_cles', 'liste', 'note_ebird'],
+                 'autres_mots_cles', 'oeil_net', 'degage', 'hauteur_oeil', 'liste', 'note_ebird'],
     'additionalProperties': False,
 }
 
@@ -289,6 +299,14 @@ def _on_list(latins, checklist):
     return int(all(name in listed for name in named))
 
 
+def _note(value):
+    """a note of Claude as the index keeps it: 1 to 5, or None"""
+    try:
+        return min(5, max(1, int(value)))
+    except (TypeError, ValueError):
+        return None
+
+
 def settle(seq, answer, data):
     """what is kept of a sequence, from Claude's answer (None for a sequence
     it did not describe) and the eBird match: the columns its frames share,
@@ -325,6 +343,7 @@ def settle(seq, answer, data):
         'habitat': photoindex.SEP.join(answer.get('habitat') or []),
         'keywords': photoindex.SEP.join(answer.get('autres_mots_cles') or []),
         'certainty': answer.get('certitude') or '',
+        **{column: _note(answer.get(key)) for column, key, _, _ in NOTES},
         'note': note,
         'on_checklist': on_list,
         'described': datetime.now().isoformat(' ', 'seconds'),
@@ -372,9 +391,20 @@ def file_tags(answer, kept, checklist, position=True):
         answer = dict(answer)
         if kept['note']:
             answer['description'] = f"{answer['description']} [eBird : {kept['note']}]"
+        words = list(answer.get('autres_mots_cles') or [])
         if kept['on_checklist'] == 0:
-            answer['autres_mots_cles'] = list(answer.get('autres_mots_cles') or []) + [OFFLIST]
+            words.append(OFFLIST)
+        # the notes of a bird photo and the people named: keywords, and a
+        #   place in the Lightroom hierarchy
+        marks = [(label, stem, kept.get(column)) for column, _, label, stem in NOTES
+                 if kept.get(column)]
+        people = [name for name in (kept.get('people') or '').split(photoindex.SEP) if name]
+        answer['autres_mots_cles'] = words + [f'{stem} {n}/5' for _, stem, n in marks] + people
+        answer['hierarchie'] = ([f'Qualité|{label}|{n}' for label, _, n in marks]
+                                + [f'Personne|{name}' for name in people])
         args += _tags(answer)
+        args += [f'-XMP-iptcExt:PersonInImage={name}' for name in people] or (
+            ['-XMP-iptcExt:PersonInImage='] if 'people' in kept else [])
     if checklist:
         args += place_tags(checklist, position)
     return args
@@ -424,7 +454,10 @@ def from_file(row):
 
     species, latin, habitat = under('Espèce'), under('Espèce latine'), under('Habitat')
     topic = (under('Sujet') or [''])[0]
-    known = set(species + latin + habitat + [topic, UNSURE, OFFLIST])
+    people = under('Personne') or _strings(row.get('PersonInImage'))
+    notes = dict(item.rsplit('|', 1) for item in under('Qualité') if '|' in item)
+    known = set(species + latin + habitat + people + [topic, UNSURE, OFFLIST]
+                + [f'{stem} {n}/5' for _, _, _, stem in NOTES for n in range(1, 6)])
     description, _, note = str(row.get('Description') or '').partition(' [eBird : ')
     event = str(row.get('Event') or '')
     out = {'title': str(row['Title']), 'topic': topic or ('oiseau' if species else ''),
@@ -433,6 +466,8 @@ def from_file(row):
            'habitat': photoindex.SEP.join(habitat),
            'keywords': photoindex.SEP.join(word for word in subject if word not in known),
            'certainty': ('à confirmer' if UNSURE in subject else 'sûre') if species else '',
+           'people': photoindex.SEP.join(people),
+           **{column: _note(notes.get(label)) for column, _, label, _ in NOTES},
            'described': 'file', 'written': 'file'}
     if event.startswith('eBird S'):
         out['checklist'] = event.split()[1]
