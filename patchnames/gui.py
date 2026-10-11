@@ -11,6 +11,7 @@ The page (gui/index.html, app.js) asks for:
     /thumb/NAME /preview/NAME   the images of a photo
     /api/reveal, /api/open   (POST) show a photo in the Finder, open it
     /api/describe            (POST) have Claude describe a sequence
+    /api/write               (POST) write into its files what the index says
     /api/job?id=             how that is going
 
 Thumbnails and previews come from the index folder, a local store that makes
@@ -20,9 +21,13 @@ While the page is served the store fills itself in the background: the frame
 that stands for each sequence, the newest first (config 'gui_fill_thumbs').
 
 The button "Identifier la séquence avec Claude" of the viewer runs
-doc.describe_sequence: one Claude call, its answer kept in the index (the
-files are not written). What the calls of a session cost is added up and
-they stop at config 'doc_budget'.
+doc.describe_sequence, one Claude call whose answer goes to the index, then
+doc.write_sequence, which writes it into the header of every file of the
+sequence with its place and the position of its eBird checklist. The page
+has the answer as soon as Claude gives it; the files follow, a long burst on
+a network drive taking minutes, and a write cut short by stopping the server
+is finished the next time it starts. "Écrire dans les fichiers" does the
+second step alone. The calls of a session stop at config 'doc_budget'.
 
 The server listens on 127.0.0.1 only, answers only to its own address (so
 that no other site can reach it through the browser), and the actions that
@@ -131,19 +136,56 @@ def _fill(stop):
     _store['filling'] = False
 
 
-def _describe(seq):
-    """the work of the button: Claude's description of a sequence, kept in
-    the index; its state goes to _jobs"""
-    from .doc import describe_sequence
+def _work(seq, ask):
+    """the work of the buttons: Claude's description of a sequence (ask),
+    kept in the index, then written into its files; its state goes to _jobs:
+    'running', 'writing' (with the photo as the index now has it, and how
+    many files are written), 'done', or 'error'"""
+    from .doc import describe_sequence, write_sequence
+    job = {'state': 'running'}
+
+    def tell(**changes):
+        with _lock:
+            job.update(changes)
+            _jobs[seq] = dict(job)
+
+    def photo():
+        db = _db()
+        row = db.execute('SELECT * FROM photos WHERE seq = ? AND rep = 1', (seq,)).fetchone()
+        db.close()
+        return _public(dict(row)) if row else None
+
     try:
-        row, cost = describe_sequence(seq)
-        with _lock:
-            _spent['total'] += cost
-            _jobs[seq] = {'state': 'done', 'photo': _public(row), 'cost': cost,
-                          'spent': _spent['total']}
+        if ask:
+            _, cost = describe_sequence(seq)
+            with _lock:
+                _spent['total'] += cost
+        tell(state='writing', photo=photo(), written=0, files=0)
+        try:
+            write_sequence(seq, progress=lambda done, total: tell(written=done, files=total))
+        except Exception as exc:
+            tell(state='error', photo=photo(),
+                 error=("La description est dans la base, mais l'écriture dans les fichiers a "
+                        f'échoué : {exc}') if ask else str(exc))
+            return
+        tell(state='done', photo=photo())
     except Exception as exc:
-        with _lock:
-            _jobs[seq] = {'state': 'error', 'error': str(exc)}
+        tell(state='error', error=str(exc))
+
+
+def _resume(stop):
+    """finish writing into their files the sequences a stopped server left
+    waiting, once the archive is there"""
+    from .doc import pending_writes, write_sequence
+    for seq in pending_writes():
+        while not stop.is_set() and not _archive()['mounted']:
+            stop.wait(60)
+        if stop.is_set():
+            return
+        try:
+            write_sequence(seq)
+        except Exception:
+            pass
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -246,7 +288,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         # a header no other site can send without asking first, and never gets
         if self.headers.get('X-Patchdoc') != '1' or self.path not in (
-                '/api/reveal', '/api/open', '/api/describe'):
+                '/api/reveal', '/api/open', '/api/describe', '/api/write'):
             self._send(403, {'error': 'refusé'})
             return
         try:
@@ -255,20 +297,23 @@ class Handler(BaseHTTPRequestHandler):
             row = db.execute('SELECT path, seq FROM photos WHERE name = ?',
                              (str(body.get('name')),)).fetchone()
             db.close()
-            if self.path == '/api/describe':
+            if self.path in ('/api/describe', '/api/write'):
+                ask = self.path == '/api/describe'
                 budget = float(_config_module.load().get('doc_budget') or 0)
                 if row is None:
                     self._send(404, {'error': 'photo inconnue'})
-                elif budget and _spent['total'] >= budget:
-                    self._send(200, {'error': f'Le budget de {budget:g} $ de cette session est '
-                                              'dépensé (config doc_budget ; relancez patchdoc gui '
+                elif ask and budget and _spent['total'] >= budget:
+                    self._send(200, {'error': "Le plafond d'appels à Claude de cette session est "
+                                              'atteint (config doc_budget ; relancez patchdoc gui '
                                               'pour repartir de zéro).'})
                 else:
                     with _lock:
-                        running = _jobs.get(row['seq'], {}).get('state') == 'running'
-                        _jobs[row['seq']] = {'state': 'running'}
-                    if not running:
-                        threading.Thread(target=_describe, args=(row['seq'],), daemon=True).start()
+                        busy = _jobs.get(row['seq'], {}).get('state') in ('running', 'writing')
+                        if not busy:
+                            _jobs[row['seq']] = {'state': 'running' if ask else 'writing'}
+                    if not busy:
+                        threading.Thread(target=_work, args=(row['seq'], ask),
+                                         daemon=True).start()
                     self._send(200, {'job': row['seq']})
                 return
             full = photoindex.resolve(row['path']) if row else None
@@ -303,6 +348,7 @@ def serve(port=None, browser=True, fill=None):
     print(f'  index : {photoindex.index_dir()}')
     print(f"  archive : {archive['mounted'] or 'non montée (' + ', '.join(archive['roots']) + ')'}")
     stop = threading.Event()
+    threading.Thread(target=_resume, args=(stop,), daemon=True).start()
     if fill:
         print('  vignettes : celles qui manquent sont faites en arrière-plan (--no-vignettes '
               'pour ne pas le faire)')

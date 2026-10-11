@@ -50,6 +50,7 @@ COLUMNS = ('name', 'path', 'stem', 'ext',
            'on_checklist',     # 1: every species named is on the checklist, 0: one is not
            'location', 'county', 'state', 'country', 'lat', 'lon',
            'described',        # when Claude described it, ISO; NULL if it never did
+           'written',          # when that was written into the file; 'pending' while it waits
            'place_norm')
 
 TYPES = {'clock_offset': 'REAL', 'zone': 'REAL', 'focal': 'REAL', 'lat': 'REAL', 'lon': 'REAL',

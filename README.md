@@ -136,8 +136,12 @@ Comment cela marche :
   avec exiftool ; `--no-backup` pour ne pas garder les copies
   `<fichier>_original`) : titre, description, mots-clés (espèce en français
   et en latin, habitat, sujet), une hiérarchie Lightroom (Espèce, Espèce
-  latine, Habitat, Sujet), le lieu (lieu, comté, province, pays) et la liste
-  comme événement IPTC (`eBird S123456789`).
+  latine, Habitat, Sujet), le lieu (lieu, comté, province, pays), la liste
+  comme événement IPTC (`eBird S123456789`), et la latitude et la longitude
+  du lieu eBird de la liste. Cette position est celle du lieu, pas celle du
+  photographe : `GPSAreaInformation` le dit (`eBird : nom du lieu`). Une
+  photo qui porte déjà sa propre position (téléphone, appareil avec GPS) la
+  garde.
 - **Vos explications** sont le même fichier que pour `patchnames keywords` :
   `~/.config/patchnames/keywords.md` (`--instructions` pour un autre).
 - Une séquence que Claude n'a pas pu décrire reste dans le dossier :
@@ -149,8 +153,8 @@ Comment cela marche :
 
 Seules les photos du dossier courant sont montrées à Claude, et la
 séquence pour laquelle vous cliquez « Identifier la séquence avec Claude »
-dans la page de recherche ; `patchdoc index` et `patchdoc vignettes` ne
-l'appellent jamais.
+dans la page de recherche ; `patchdoc index`, `patchdoc vignettes` et le
+bouton « Écrire dans les fichiers » ne l'appellent jamais.
 `patchdoc` passe par la commande `claude` (votre compte Claude Code) : avec
 un abonnement, rien n'est facturé à l'appel, mais chaque séquence compte
 dans vos limites d'utilisation. Mesuré sur quatre séquences, en dollars US
@@ -225,11 +229,18 @@ l'appel à Claude le demandent.
 - **« Identifier la séquence avec Claude ».** Dans la visionneuse, ce bouton
   montre la séquence à Claude là où sont ses fichiers (la vue du milieu,
   l'agrandissement au point de mise au point, une planche de douze vues au
-  plus) avec sa liste eBird, et remplace ce que la base en dit. Un appel :
-  environ 20 s, au coût annoncé sous le bouton ; les appels d'une session
-  s'arrêtent à `doc_budget`. La réponse va dans la base, pas dans les
-  fichiers : pour l'écrire aussi dans les fichiers, passez `patchdoc
-  --force` dans leur dossier.
+  plus) avec sa liste eBird. La réponse arrive en une vingtaine de secondes
+  dans la page et dans la base, puis elle est écrite dans l'en-tête de
+  chaque fichier de la séquence, avec le lieu et la position de la liste.
+  Sur un disque réseau, cette écriture récrit chaque fichier et peut prendre
+  des minutes pour une longue rafale ; la page dit où elle en est, et une
+  écriture coupée par l'arrêt du serveur reprend à son prochain démarrage.
+  Les fichiers sont récrits sur place, sans copie `<fichier>_original`
+  (config `gui_backup` pour en garder une).
+- **« Écrire dans les fichiers ».** Le bouton voisin fait seulement la
+  seconde étape, sans appeler Claude : il écrit dans les fichiers ce que la
+  base sait déjà de la séquence. Pour une séquence jamais décrite mais prise
+  pendant une liste eBird, c'est le lieu, la liste et la position.
 
 - **Des photos sur des disques externes ou réseau.** Le chemin d'une photo
   archivée est gardé relatif à l'archive. Si l'archive n'est pas toujours

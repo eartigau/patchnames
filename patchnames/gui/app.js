@@ -196,35 +196,48 @@ async function act(what, name, box) {
   }
 }
 
-// the button of the viewer: Claude describes the sequence where its files are
-async function describe(photo, button, box) {
+// the buttons of the viewer: Claude describes the sequence where its files
+// are ("describe"), and what the index says of it is written into its files
+// ("write" does only that). photo.job is what is said of the work under way.
+async function work(photo, what) {
   const index = state.items.indexOf(photo);
-  button.disabled = true;
-  box.textContent = "Claude regarde la séquence…";
-  const failed = (message) => { box.textContent = message; button.disabled = false; };
+  const say = (text, busy) => {
+    photo.job = text;
+    photo.busy = busy;
+    if (state.current === index) $("viewerInfo").replaceChildren(...info(photo));
+  };
+  const update = (fresh) => {
+    Object.assign(photo, fresh);
+    if (index >= 0 && $("grid").children[index]) $("grid").children[index].replaceWith(tile(photo, index));
+    if (state.current === index) show(photo.name);
+  };
+  say(what === "describe" ? "Claude regarde la séquence…" : "Écriture dans les fichiers…", true);
   try {
-    const asked = await (await fetch("/api/describe", {
+    const asked = await (await fetch("/api/" + what, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Patchdoc": "1" },
       body: JSON.stringify({ name: photo.name }),
     })).json();
-    if (asked.error) return failed(asked.error);
-    for (let waited = 0; waited < 300; waited += 2) {
+    if (asked.error) return say(asked.error, false);
+    let shown = false;
+    for (let waited = 0; waited < 7200; waited += 2) {
       await new Promise((resolve) => setTimeout(resolve, 2000));
       const job = await (await fetch("/api/job?id=" + encodeURIComponent(asked.job))).json();
-      if (job.state === "error") return failed("Claude n'a pas pu décrire la séquence : " + job.error);
-      if (job.state !== "done") continue;
-      Object.assign(photo, job.photo);
-      if (index >= 0 && $("grid").children[index]) $("grid").children[index].replaceWith(tile(photo, index));
-      if (state.current === index) {
-        $("viewerInfo").replaceChildren(...info(photo));
-        show(photo.name);
+      if (job.photo && !shown && job.state !== "running") {
+        update(job.photo);          // Claude's answer, before the files have it
+        shown = true;
       }
-      return;
+      if (job.state === "error") return say(job.error, false);
+      if (job.state === "writing") {
+        say(job.files ? `Écriture dans les fichiers : ${job.written} sur ${job.files}…` : "Écriture dans les fichiers…", true);
+      } else if (job.state === "done") {
+        update(job.photo);
+        return say("Les fichiers de la séquence sont à jour.", false);
+      }
     }
-    failed("Claude met trop de temps à répondre ; réessayez plus tard.");
+    say("L'écriture dure plus de deux heures ; elle continue sans cette page.", false);
   } catch (err) {
-    failed(String(err));
+    say(String(err), false);
   }
 }
 
@@ -267,15 +280,20 @@ function info(photo) {
       + "son nom et de la liste eBird pendant laquelle elle a été prise." }));
   }
   if (photo.reachable && state.claude) {
-    const each = state.claude.each.toFixed(state.claude.each < 0.01 ? 3 : 2).replace(".", ",");
-    const said = el("p", { class: "mono", text: `Un appel à Claude : environ 20 s et ${each} $ US au prix de l'API. `
-      + "La réponse va dans la base, pas dans les fichiers." });
     out.push(el("div", { class: "actions" },
-      el("button", { class: "pill go", type: "button",
+      el("button", { class: "pill go", type: "button", disabled: photo.busy && "disabled",
                      text: photo.described ? "Identifier de nouveau avec Claude" : "Identifier la séquence avec Claude",
-                     onclick: (event) => describe(photo, event.currentTarget, said) })), said);
+                     title: "Un appel à Claude, environ 20 s ; la réponse est écrite dans la base et dans l'en-tête des fichiers de la séquence",
+                     onclick: () => work(photo, "describe") }),
+      (photo.described || photo.checklist) && el("button", { class: "pill", type: "button", disabled: photo.busy && "disabled",
+                     text: "Écrire dans les fichiers",
+                     title: "Écrire dans l'en-tête des fichiers ce que la base sait de la séquence : description, lieu, latitude et longitude de la liste eBird (sans appeler Claude)",
+                     onclick: () => work(photo, "write") })),
+      el("p", { class: "mono", text: photo.job || (photo.written === "pending"
+        ? "Les fichiers attendent encore ce que dit la base ; l'écriture reprendra toute seule."
+        : photo.written ? "Les fichiers de la séquence portent cette description." : "") }));
   } else if (photo.reachable === false) {
-    out.push(el("p", { class: "mono", text: "Pour demander à Claude d'identifier la séquence, montez le disque d'archive." }));
+    out.push(el("p", { class: "mono", text: "Pour demander à Claude d'identifier la séquence ou écrire dans les fichiers, montez le disque d'archive." }));
   }
 
   const species = split(photo.species), latin = split(photo.latin);

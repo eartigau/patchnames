@@ -38,6 +38,7 @@ DEFAULTS = {
     'index_dir': str(Path.home() / 'photo' / 'patchdoc'),   # the index, thumbnails, previews
     'gui_port': 8765,
     'gui_fill_thumbs': True,    # the search page makes the missing thumbnails in the background
+    'gui_backup': False,        # keep <file>_original when the search page writes into a file
     # the eBird data (ebird.py)
     'ebird_dir': str(Path.home() / '.config' / 'patchnames' / 'ebird'),
     'ebird_search': ['~/Downloads/ebird_*.zip', '~/Downloads/MyEBirdData*.csv'],

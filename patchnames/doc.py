@@ -72,13 +72,16 @@ TOPICS = ('oiseau', 'autre animal', 'plante', 'paysage', 'ciel', 'ville et archi
 OFFLIST = 'absent de la liste eBird'
 #: a position within this many km of an eBird place takes its name
 GPS_KM = 2.0
+#: start of GPSAreaInformation in a file whose position is that of its eBird
+#:  checklist, written here
+GPS_MARK = 'eBird'
 
 #: what exiftool is asked of each photo
 FIELDS = ['-DateTimeOriginal', '-OffsetTimeOriginal', '-Model', '-LensModel', '-LensID',
-          '-LensInfo', '-Lens', '-FocalLength#', '-GPSLatitude#', '-GPSLongitude#', '-AFAreaXPosition',
-          '-AFAreaYPosition', '-AFImageWidth', '-AFImageHeight', '-XMP-dc:Title',
-          '-XMP-dc:Description', '-XMP-dc:Subject', '-XMP-lr:HierarchicalSubject',
-          '-XMP-iptcExt:Event']
+          '-LensInfo', '-Lens', '-FocalLength#', '-GPSLatitude#', '-GPSLongitude#',
+          '-GPSAreaInformation', '-AFAreaXPosition', '-AFAreaYPosition', '-AFImageWidth',
+          '-AFImageHeight', '-XMP-dc:Title', '-XMP-dc:Description', '-XMP-dc:Subject',
+          '-XMP-lr:HierarchicalSubject', '-XMP-iptcExt:Event']
 
 #: a canonical name: YYMMDD_HHMMSS[_WHO]_NUM.ext
 NAME = re.compile(r'^(\d{6})_(\d{6})(?:_([A-Z]{2}))?_[^.]+\.(\w+)$')
@@ -329,27 +332,83 @@ def settle(seq, answer, data):
     return sure, checklist
 
 
-def file_tags(answer, kept, checklist):
-    """the exiftool arguments of a sequence: Claude's answer (as `patchnames
-    keywords` writes it), the place, and the eBird checklist as the event"""
-    answer = dict(answer)
-    if kept['note']:
-        answer['description'] = f"{answer['description']} [eBird : {kept['note']}]"
-    if kept['on_checklist'] == 0:
-        answer['autres_mots_cles'] = list(answer.get('autres_mots_cles') or []) + [OFFLIST]
-    args = _tags(answer)
-    if checklist:
-        country = _ebird.country_name(checklist.country)
-        args += [f'-XMP-iptcExt:Event=eBird {checklist.sid}',
-                 f'-XMP-iptcCore:Location={checklist.location}',
-                 f'-IPTC:Sub-location={checklist.location[:32]}',
-                 f'-XMP-photoshop:City={checklist.county}', f'-IPTC:City={checklist.county[:32]}',
-                 f'-XMP-photoshop:State={checklist.state}',
-                 f'-IPTC:Province-State={checklist.state[:32]}',
-                 f'-XMP-photoshop:Country={country}',
-                 f'-IPTC:Country-PrimaryLocationName={country[:64]}',
-                 f'-XMP-iptcCore:CountryCode={checklist.country}']
+def own_position(row):
+    """whether a photo carries a position of its own (a phone, a camera with
+    a GPS), which is then left alone; one written here from an eBird
+    checklist says so in GPSAreaInformation and may be written again"""
+    return (row.get('GPSLatitude') not in (None, '')
+            and not str(row.get('GPSAreaInformation') or '').startswith(GPS_MARK))
+
+
+def place_tags(checklist, position=True):
+    """the exiftool arguments of the place of a checklist: its names, the
+    checklist as the IPTC event, and (position) its latitude and longitude,
+    marked as those of the eBird place, not of the photographer"""
+    country = _ebird.country_name(checklist.country)
+    args = ['-charset', 'iptc=UTF8', '-codedcharacterset=utf8',
+            f'-XMP-iptcExt:Event=eBird {checklist.sid}',
+            f'-XMP-iptcCore:Location={checklist.location}',
+            f'-IPTC:Sub-location={checklist.location[:32]}',
+            f'-XMP-photoshop:City={checklist.county}', f'-IPTC:City={checklist.county[:32]}',
+            f'-XMP-photoshop:State={checklist.state}',
+            f'-IPTC:Province-State={checklist.state[:32]}',
+            f'-XMP-photoshop:Country={country}',
+            f'-IPTC:Country-PrimaryLocationName={country[:64]}',
+            f'-XMP-iptcCore:CountryCode={checklist.country}']
+    if position and checklist.lat is not None and checklist.lon is not None:
+        # a signed number in a ...Ref tag gives its N/S or E/W
+        args += [f'-GPSLatitude={abs(checklist.lat)}', f'-GPSLatitudeRef={checklist.lat}',
+                 f'-GPSLongitude={abs(checklist.lon)}', f'-GPSLongitudeRef={checklist.lon}',
+                 '-GPSMapDatum=WGS-84', f'-GPSAreaInformation={GPS_MARK} : {checklist.location}']
     return args
+
+
+def file_tags(answer, kept, checklist, position=True):
+    """the exiftool arguments of a sequence: Claude's answer (as `patchnames
+    keywords` writes it; None for a sequence it did not describe), the place,
+    its latitude and longitude, and the eBird checklist as the event"""
+    args = []
+    if answer:
+        answer = dict(answer)
+        if kept['note']:
+            answer['description'] = f"{answer['description']} [eBird : {kept['note']}]"
+        if kept['on_checklist'] == 0:
+            answer['autres_mots_cles'] = list(answer.get('autres_mots_cles') or []) + [OFFLIST]
+        args += _tags(answer)
+    if checklist:
+        args += place_tags(checklist, position)
+    return args
+
+
+def answer_of(row):
+    """what the index says of a sequence, in the shape of an answer of
+    Claude, to write it into the files; None for one never described"""
+    if not row['title']:
+        return None
+
+    def parts(key):
+        return [part for part in (row[key] or '').split(photoindex.SEP) if part]
+
+    species = [{'francais': fr, 'latin': la}
+               for fr, la in zip(parts('species'), parts('latin') + [''] * len(parts('species')))]
+    return {'titre': row['title'], 'sujet': row['topic'] or '', 'especes': species,
+            'habitat': parts('habitat'), 'description': row['description'] or row['title'],
+            'certitude': row['certainty'] or 'sûre', 'autres_mots_cles': parts('keywords')}
+
+
+def write_files(args, names, rows, backup=True):
+    """write tags into files with exiftool, the latitude and longitude left
+    out for those that carry a position of their own; raises RuntimeError"""
+    position = [arg for arg in args if arg.startswith('-GPS')]
+    for group, extra in (([n for n in names if not own_position(rows.get(n, {}))], position),
+                         ([n for n in names if own_position(rows.get(n, {}))], [])):
+        if not group:
+            continue
+        cmd = ['exiftool', '-q', '-m'] + ([] if backup else ['-overwrite_original'])
+        res = subprocess.run(cmd + [arg for arg in args if arg not in position] + extra + group,
+                             capture_output=True, text=True)
+        if res.returncode != 0:
+            raise RuntimeError(f'exiftool : {res.stderr.strip()[:300]}')
 
 
 def from_file(row):
@@ -374,7 +433,7 @@ def from_file(row):
            'habitat': photoindex.SEP.join(habitat),
            'keywords': photoindex.SEP.join(word for word in subject if word not in known),
            'certainty': ('à confirmer' if UNSURE in subject else 'sûre') if species else '',
-           'described': 'file'}
+           'described': 'file', 'written': 'file'}
     if event.startswith('eBird S'):
         out['checklist'] = event.split()[1]
     if OFFLIST in subject:
@@ -685,11 +744,8 @@ def document(gap=None, force=False, dry_run=False, index_only=False, backup=True
                 spent['total'] += cost
             kept, checklist = settle(seq, answer, data)
             if not (dry_run or index_only):
-                cmd = ['exiftool', '-q'] + ([] if backup else ['-overwrite_original'])
-                res = subprocess.run(cmd + file_tags(answer, kept, checklist) + seq['names'],
-                                     capture_output=True, text=True)
-                if res.returncode != 0:
-                    raise RuntimeError(f'exiftool : {res.stderr.strip()[:300]}')
+                write_files(file_tags(answer, kept, checklist), seq['names'], rows, backup)
+                kept['written'] = kept['described']
             if not dry_run:
                 thumbs(seq['names'])
             return answer, kept
@@ -1015,9 +1071,9 @@ def _archive_pictures(frames, full, tmpdir, row, sheet):
 def describe_sequence(seq_id, model=None, effort=None, sheet=12):
     """Have Claude describe one sequence of the index, where its files are
     (the button of the search page): its row in the index, as a dict, and the
-    cost in dollars at API prices. The answer goes to the index; nothing is
-    written into the files. Raises RuntimeError when the sequence cannot be
-    read (the archive drive is not mounted)."""
+    cost in dollars at API prices. The answer goes to the index, and waits
+    there for write_sequence to put it into the files. Raises RuntimeError
+    when the sequence cannot be read (the archive drive is not mounted)."""
     cfg = _cfg()
     path = write_template(instructions_path(), quiet=True)
     with open(os.path.expanduser(path)) as handle:
@@ -1050,12 +1106,67 @@ def describe_sequence(seq_id, model=None, effort=None, sheet=12):
                                   model or cfg.get('keywords_model'),
                                   effort or cfg.get('doc_effort'))
     kept, _ = settle(seq, answer, data)
-    photoindex.put(db, [dict(kept, name=name) for name in names]
+    # 'pending': the files do not hold it yet (write_sequence)
+    photoindex.put(db, [dict(kept, name=name, written='pending') for name in names]
                    + [{'name': middle['name'], 'camera': seq['camera'], 'lens': _lens(exif),
                        'focal': _focal(exif) or None, 'zone': seq['zone']}])
     row = dict(db.execute('SELECT * FROM photos WHERE seq = ? AND rep = 1', (seq_id,)).fetchone())
     db.close()
     return row, cost
+
+
+def write_sequence(seq_id, progress=None, chunk=6):
+    """Write into the files of a sequence what the index says of it: Claude's
+    description if it has one, the place, the latitude and longitude of its
+    eBird checklist, and the checklist as the event. The files are rewritten
+    where they are, a few at a time (progress(done, total) after each), and
+    marked in the index as they go, so that a write cut short is finished
+    later; no <file>_original copy is left in the archive unless config
+    'gui_backup'. Returns the number of files written; raises RuntimeError."""
+    cfg = _cfg()
+    db = photoindex.connect()
+    frames = photoindex.sequence(db, seq_id)
+    row = db.execute('SELECT * FROM photos WHERE seq = ? AND rep = 1', (seq_id,)).fetchone()
+    if not frames or row is None:
+        raise RuntimeError('séquence inconnue')
+    data = _ebird.load()
+    checklist = data.lists.get(row['checklist']) if data and row['checklist'] else None
+    args = file_tags(answer_of(row), dict(row, note=row['note'] or ''), checklist)
+    if not args:
+        raise RuntimeError("la base n'a rien à écrire pour cette séquence (ni description, "
+                           'ni liste eBird)')
+    paths = {frame['name']: photoindex.resolve(frame['path']) for frame in frames}
+    todo = [name for name in paths if paths[name]]
+    if not todo:
+        raise RuntimeError("les fichiers sont hors d'atteinte (le disque d'archive est-il monté ?)")
+    # the frames of a sequence come from one camera: the middle one says
+    #   whether they carry a position of their own
+    middle = paths[todo[len(todo) // 2]]
+    own = own_position(read_exif([middle], fast=True).get(middle, {}))
+    rows = {paths[name]: ({'GPSLatitude': 0} if own else {}) for name in todo}
+    db.execute("UPDATE photos SET written = 'pending' WHERE seq = ?", (seq_id,))
+    db.commit()
+    done = 0
+    for start in range(0, len(todo), chunk):
+        part = todo[start:start + chunk]
+        write_files(args, [paths[name] for name in part], rows, backup=bool(cfg.get('gui_backup')))
+        db.execute(f'UPDATE photos SET written = ? WHERE name IN ({", ".join("?" * len(part))})',
+                   [datetime.now().isoformat(' ', 'seconds')] + part)
+        db.commit()
+        done += len(part)
+        if progress:
+            progress(done, len(todo))
+    db.close()
+    return done
+
+
+def pending_writes():
+    """the sequences whose files still wait for what the index says of them"""
+    db = photoindex.connect()
+    seqs = [row[0] for row in db.execute(
+        "SELECT DISTINCT seq FROM photos WHERE written = 'pending' AND seq IS NOT NULL")]
+    db.close()
+    return seqs
 
 
 def thumbnails(year=None, every=False, previews=False, limit=None, jobs=4):
