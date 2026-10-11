@@ -42,6 +42,8 @@ DEFAULTS = {
     'raw_app': 'Affinity',      # the application of the "Ouvrir avec" button of a raw file
     'geocode': True,            # ask OpenStreetMap for the place of a photo that has a position
     'gui_scan_faces': True,     # the search page looks for the faces of the photos in the background
+    'people': [],               # the names the search page offers first for a face (your own
+                                #   config file is the place for them)
     'pano_size': 3000,          # long side of the frames of a panorama when stitched; 0: full size
     # the eBird data (ebird.py)
     'ebird_dir': str(Path.home() / '.config' / 'patchnames' / 'ebird'),

@@ -16,7 +16,13 @@ In the directory of the new photos, `patchdoc`:
    around the focus point and a contact sheet, with the checklist. Claude
    answers with a title, the main subject, a description, keywords, and for
    a bird the species, how sure it is, and what does not fit the checklist
-   (the photographer may have been wrong, or have left a bird out);
+   (the photographer may have been wrong, or have left a bird out). A bird
+   photo also gets three notes from 1 to 5: the focus on the eye, how clear
+   of branches the bird is, how close to eye level the photo is. Every
+   frame of a burst gets its own, to find the best of the lot: the
+   sharpness of each is measured where the camera focused, Claude sees the
+   sharpest at full resolution and all of them cut around their focus point,
+   and the best frame then stands for the sequence in the search page;
 4. writes the answer into every frame of the sequence with exiftool (title,
    description, keywords, a Lightroom hierarchy, the place, and the eBird
    checklist as the event), like `patchnames keywords`;
@@ -76,6 +82,19 @@ OFFLIST = 'absent de la liste eBird'
 #: start of GPSAreaInformation in a file whose position is that of its eBird
 #:  checklist, written here
 GPS_MARK = 'eBird'
+#: a burst of bird photos is noted frame by frame. Claude sees every frame cut
+#:  to TILE_CUT pixels around its focus point and shown at TILE, TILES to a
+#:  sheet (beyond RATED frames, the others take the notes of the nearest), and
+#:  the EYES sharpest frames at full resolution, a square of EYE pixels around
+#:  the focus point, EYE_SHEET to a sheet, to judge the focus on the eye
+TILE_CUT, TILE, TILES, RATED = (1400, 933), (350, 233), 16, 96
+EYE, EYE_SHEET, EYES = 512, 6, 12
+#: a frame whose eye Claude did not see at full resolution: the note of one it
+#:  saw, less this much each time the sharpness measured at the focus point
+#:  halves
+SOFTER = 1.0
+#: keyword of the best frame of a burst
+BEST = 'meilleure vue'
 #: the notes of a bird photo, 1 to 5: column of the index, key of Claude's
 #:  answer, name in the Lightroom hierarchy (Qualité|...), keyword
 NOTES = (('eye', 'oeil_net', 'Œil net', 'œil net'), ('clear', 'degage', 'Dégagement', 'dégagé'),
@@ -123,6 +142,7 @@ Réponds par un objet JSON :
 - "oeil_net" : pour un oiseau, la netteté de la mise au point sur son œil, de 1 à 5, jugée sur l'agrandissement à pleine résolution : 5 = œil parfaitement net (reflet et détail des plumes autour de l'œil), 3 = acceptable, 1 = flou ; null si l'œil ne se voit pas ou s'il n'y a pas d'oiseau ;
 - "degage" : pour un oiseau, à quel point il est dégagé, de 1 à 5 : 5 = entier et sans rien devant lui, 3 = en partie masqué, 1 = presque caché par des branches ou des feuilles ; null sans oiseau ;
 - "hauteur_oeil" : pour un oiseau, à quel point la photo est prise à la hauteur de son œil, de 1 à 5 : 5 = appareil à sa hauteur, 3 = angle modéré, 1 = forte plongée ou contre-plongée (oiseau haut dans un arbre ou dans le ciel, ou vu de dessus) ; null sans oiseau ;
+- "vues" : s'il y a des planches « vues » et « yeux », une entrée par vue numérotée, pour trouver la meilleure de la rafale : {{"numero": "...", "oeil_visible": true si l'œil de l'oiseau se voit dans cette vue, "oeil_net": la netteté de son œil de 1 à 5, jugée sur la planche « yeux » quand l'œil s'y voit ; quand il ne se voit que sur la planche « vues », juge-la là, plus grossièrement, sans dépasser 4 ; null si l'œil ne se voit pas, "degage": 1 à 5, "hauteur_oeil": 1 à 5}}, avec les mêmes échelles ; "degage" et "hauteur_oeil" valent null si l'oiseau n'est pas dans la vue. Les vues d'une rafale diffèrent (l'oiseau tourne la tête, passe derrière une branche, s'envole) : note chacune pour elle-même. [] sans ces planches ;
 - "liste" : l'identifiant (S...) de la liste eBird à laquelle la séquence appartient, null s'il n'y en a pas ;
 - "note_ebird" : une phrase seulement si ce que tu vois ne s'accorde pas avec la liste eBird (espèce absente de la liste, autre espèce plus probable que celle notée) ; une chaîne vide "" quand la photo s'accorde avec la liste ou qu'il n'y a pas de liste."""
 
@@ -131,6 +151,17 @@ VIEWS = ("La première est la vue du milieu de la séquence, réduite ; la deuxi
          "l'appareil (regarde-la attentivement : un sujet lointain n'est souvent visible que là)")
 SHEETS = (" ; les suivantes sont des planches contact de toutes les vues de la séquence (le "
           "numéro de chaque vue est écrit dessus), pour vérifier qu'il s'agit du même sujet")
+
+#: a burst of bird photos: its sharpest frame instead of the middle one, and
+#:  sheets of every frame cut around its focus point
+SHARPEST = ('du milieu', 'la plus nette')
+BURST = (" ; viennent ensuite les planches « vues », où chaque vue de la séquence est recadrée "
+         "autour de son point de mise au point et réduite quatre fois (son numéro est écrit "
+         "dessus), pour vérifier qu'il s'agit du même sujet et noter chaque vue ; puis les "
+         "planches « yeux », où les vues les plus nettes sont montrées à pleine résolution "
+         "autour de leur point de mise au point (même numéro), pour juger la netteté de l'œil "
+         "vue par vue. Le titre et la description parlent de ce que montre la séquence, jamais "
+         "des planches, des numéros de vue ni de la netteté")
 
 BIRD = ("Elle a été prise au téléobjectif ({focal} mm) : le sujet est presque toujours un "
         "oiseau, parfois un autre animal.")
@@ -159,11 +190,20 @@ SCHEMA = {
         'oeil_net': {'type': ['integer', 'null']},
         'degage': {'type': ['integer', 'null']},
         'hauteur_oeil': {'type': ['integer', 'null']},
+        'vues': {'type': 'array', 'items': {
+            'type': 'object',
+            'properties': {'numero': {'type': 'string'}, 'oeil_visible': {'type': 'boolean'},
+                           'oeil_net': {'type': ['integer', 'null']},
+                           'degage': {'type': ['integer', 'null']},
+                           'hauteur_oeil': {'type': ['integer', 'null']}},
+            'required': ['numero', 'oeil_visible', 'oeil_net', 'degage', 'hauteur_oeil'],
+            'additionalProperties': False}},
         'liste': {'type': ['string', 'null']},
         'note_ebird': {'type': 'string'},
     },
     'required': ['titre', 'sujet', 'especes', 'habitat', 'description', 'certitude',
-                 'autres_mots_cles', 'oeil_net', 'degage', 'hauteur_oeil', 'liste', 'note_ebird'],
+                 'autres_mots_cles', 'oeil_net', 'degage', 'hauteur_oeil', 'vues', 'liste',
+                 'note_ebird'],
     'additionalProperties': False,
 }
 
@@ -401,8 +441,11 @@ def file_tags(answer, kept, checklist, position=True):
         #   place in the Lightroom hierarchy
         marks = [(label, stem, kept.get(column)) for column, _, label, stem in NOTES
                  if kept.get(column)]
-        answer['autres_mots_cles'] = words + [f'{stem} {n}/5' for _, stem, n in marks] + people
+        best = [BEST] if kept.get('best') else []
+        answer['autres_mots_cles'] = (words + [f'{stem} {n}/5' for _, stem, n in marks] + best
+                                      + people)
         answer['hierarchie'] = ([f'Qualité|{label}|{n}' for label, _, n in marks]
+                                + ['Qualité|Meilleure vue'] * len(best)
                                 + [f'Personne|{name}' for name in people])
         args += _tags(answer)
     else:
@@ -466,7 +509,7 @@ def from_file(row):
     topic = (under('Sujet') or [''])[0]
     people = under('Personne') or _strings(row.get('PersonInImage'))
     notes = dict(item.rsplit('|', 1) for item in under('Qualité') if '|' in item)
-    known = set(species + latin + habitat + people + [topic, UNSURE, OFFLIST]
+    known = set(species + latin + habitat + people + [topic, UNSURE, OFFLIST, BEST]
                 + [f'{stem} {n}/5' for _, _, _, stem in NOTES for n in range(1, 6)])
     description, _, note = str(row.get('Description') or '').partition(' [eBird : ')
     event = str(row.get('Event') or '')
@@ -478,6 +521,7 @@ def from_file(row):
            'certainty': ('à confirmer' if UNSURE in subject else 'sûre') if species else '',
            'people': photoindex.SEP.join(people),
            **{column: _note(notes.get(label)) for column, _, label, _ in NOTES},
+           'best': int('Meilleure vue' in under('Qualité')),
            'described': 'file', 'written': 'file'}
     if event.startswith('eBird S'):
         out['checklist'] = event.split()[1]
@@ -488,8 +532,8 @@ def from_file(row):
 
 def said_of(seq, rows, data):
     """the columns of a sequence nobody asked Claude about: its eBird match,
-    and what its middle frame says of itself"""
-    said = from_file(rows.get(seq['names'][len(seq['names']) // 2], {}))
+    and what the frame that stands for it says of itself"""
+    said = from_file(rows.get(stands_for(seq, own_notes(seq, rows)), {}))
     kept, checklist = settle(seq, None, data)
     during = kept['match'] == 'inside'
     kept.update(said)
@@ -503,12 +547,35 @@ def said_of(seq, rows, data):
     return kept
 
 
+def own_notes(seq, rows):
+    """the notes each frame of a sequence holds in its file, {name: {'eye',
+    'clear', 'level', 'best'}} (a sequence described before: every frame of
+    a burst says its own)"""
+    said = {name: from_file(rows.get(name, {})) for name in seq['names']}
+    return {name: {key: mine[key] for key in ('eye', 'clear', 'level', 'best')}
+            for name, mine in said.items() if mine}
+
+
+def stands_for(seq, notes):
+    """the frame that stands for a sequence in the search page: the best of
+    a burst, the middle one otherwise"""
+    names = seq['names']
+    return seq.get('rep') or next((name for name in names if (notes.get(name) or {}).get('best')),
+                                  names[len(names) // 2])
+
+
 def frame_records(seq, kept, rows, paths):
     """the records of the frames of a sequence for the index; paths: {name
     as found: path where the file now is}"""
     names = seq['names']
     final = [paths.get(name, os.path.abspath(name)) for name in names]
     first = os.path.splitext(os.path.basename(final[0]))[0]
+    # the notes of each frame: those just given to a burst, or those the
+    #   files hold when the sequence is indexed from what they say
+    notes = seq.get('notes') or (own_notes(seq, rows) if kept.get('described') == 'file' else {})
+    stands = stands_for(seq, notes)
+    # what is said of the sequence goes for each frame, its notes aside
+    kept = dict(kept, best=0)
     records = []
     for k, (name, path) in enumerate(zip(names, final)):
         row = rows.get(name, {})
@@ -521,9 +588,182 @@ def frame_records(seq, kept, rows, paths):
                       if when else None,
                       camera=str(row.get('Model') or ''), lens=_lens(row),
                       focal=_focal(row) or None, zone=_zone(row), seq=first, seq_n=len(names),
-                      rep=int(k == len(names) // 2))
+                      rep=int(name == stands))
+        record.update(notes.get(name) or notes.get(stands) or {})
+        record['best'] = int(bool((notes.get(name) or {}).get('best')))
         records.append(record)
     return records
+
+
+# ---------------------------------------------------------------------------
+# A burst of bird photos, frame by frame: which is the best of the lot
+# ---------------------------------------------------------------------------
+
+def _cut(img, row, size):
+    """a piece of a frame of this size in pixels around its focus point (the
+    Nikon AF area; the centre of the frame without it)"""
+    width, height = img.size
+    try:
+        cx = float(row['AFAreaXPosition']) / float(row['AFImageWidth']) * width
+        cy = float(row['AFAreaYPosition']) / float(row['AFImageHeight']) * height
+    except (KeyError, TypeError, ValueError, ZeroDivisionError):
+        cx, cy = width / 2, height / 2
+    w, h = min(size[0], width), min(size[1], height)
+    left = int(min(max(cx - w / 2, 0), width - w))
+    top = int(min(max(cy - h / 2, 0), height - h))
+    return img.crop((left, top, left + w, top + h))
+
+
+def sharpness(img, row):
+    """how sharp a frame is where the camera focused: the variance of the
+    Laplacian of a 512 px square at full resolution, its pixels binned by
+    two against the noise. A number to compare the frames of a burst, which
+    show the same subject in the same light; it means nothing alone."""
+    import numpy as np
+    a = np.asarray(_cut(img, row, (512, 512)).convert('L'), dtype='float32')
+    a = a[:a.shape[0] // 2 * 2, :a.shape[1] // 2 * 2]
+    a = (a[0::2, 0::2] + a[1::2, 0::2] + a[0::2, 1::2] + a[1::2, 1::2]) / 4
+    lap = 4 * a[1:-1, 1:-1] - a[:-2, 1:-1] - a[2:, 1:-1] - a[1:-1, :-2] - a[1:-1, 2:]
+    return float(lap.var())
+
+
+def _number(name):
+    """the number written on a frame in the sheets: the last part of its name"""
+    return os.path.splitext(os.path.basename(name))[0].split('_')[-1]
+
+
+def _sheet(pictures, columns, size):
+    """a sheet of numbered pictures, [(name, PIL image of this size)]"""
+    from PIL import Image, ImageDraw
+    columns = min(columns, len(pictures))
+    rows = (len(pictures) + columns - 1) // columns
+    sheet = Image.new('RGB', (columns * size[0], rows * size[1]), 'white')
+    draw = ImageDraw.Draw(sheet)
+    for k, (name, picture) in enumerate(pictures):
+        x, y = (k % columns) * size[0], (k // columns) * size[1]
+        sheet.paste(picture, (x, y))
+        draw.rectangle((x, y, x + 8 * len(_number(name)) + 8, y + 15), fill='black')
+        draw.text((x + 4, y + 2), _number(name), fill='yellow')
+    return sheet
+
+
+def burst_pictures(names, load, rows, tmpdir, index, keep=None, progress=None):
+    """the pictures of a burst of bird photos for Claude: its sharpest frame
+    at 1400 px and the crop of that frame at full resolution around its focus
+    point, to say what it shows; the sheets "vues", every frame cut around
+    its own focus point and reduced; and the sheets "yeux", the EYES
+    sharpest frames at full resolution around their focus point.
+
+    Each frame is loaded once at full size (load(name) -> a PIL image), which
+    also gives its sharpness; one that cannot be read is left out. Returns
+    the paths and what frame_notes needs: {'sharp': {name: sharpness},
+    'shown': the sharpest frame, 'rated': the frames of the sheets "vues",
+    'eyes': those of the sheets "yeux"}; raises RuntimeError when no frame
+    can be read."""
+    sharp, tiles, squares, shown, full, size = {}, {}, {}, None, None, None
+    for k, name in enumerate(names):
+        try:
+            img = load(name)
+        except Exception:
+            img = None
+        # (a file read badly gives a smaller preview: its sharpness would not
+        #   compare with the others')
+        size = size or (img.size if img is not None else None)
+        if img is not None and sorted(img.size) == sorted(size):
+            row = rows.get(name, {})
+            sharp[name] = sharpness(img, row)
+            tiles[name] = _cut(img, row, TILE_CUT)
+            tiles[name].thumbnail(TILE)
+            squares[name] = _cut(img, row, (EYE, EYE))
+            if len(squares) > EYES:
+                del squares[min(squares, key=sharp.get)]
+            if keep:
+                keep(name, img, False)
+            if shown is None or sharp[name] > sharp[shown]:
+                shown, full = name, img
+        if progress:
+            progress(k + 1, len(names))
+    if shown is None:
+        raise RuntimeError('aucune vue de la séquence ne peut être lue')
+    if keep:
+        keep(shown, full, True)
+    paths = [os.path.join(tmpdir, f'seq{index:03d}_nette.jpg'),
+             os.path.join(tmpdir, f'seq{index:03d}_focus.jpg')]
+    small = full.copy()
+    small.thumbnail((1400, 1400))
+    small.save(paths[0], quality=88)
+    _cut(full, rows.get(shown, {}), TILE_CUT).save(paths[1], quality=88)
+    seen = [name for name in names if name in sharp]
+    rated = seen if len(seen) <= RATED else [
+        seen[round(i * (len(seen) - 1) / (RATED - 1))] for i in range(RATED)]
+    eyes = [name for name in seen if name in squares]
+    for kind, frames, pictures, columns, size, count in (
+            ('vues', rated, tiles, 4, TILE, TILES), ('yeux', eyes, squares, 3, (EYE, EYE), EYE_SHEET)):
+        for start in range(0, len(frames), count):
+            paths.append(os.path.join(tmpdir, f'seq{index:03d}_{kind}{start // count}.jpg'))
+            _sheet([(name, pictures[name]) for name in frames[start:start + count]], columns,
+                   size).save(paths[-1], quality=88)
+    return paths, {'sharp': sharp, 'shown': shown, 'rated': rated, 'eyes': eyes}
+
+
+def frame_notes(names, burst, answer):
+    """the notes of each frame of a burst, {name: {'eye', 'clear', 'level',
+    'sharp', 'best'}}, and its best frame.
+
+    How clear the bird is, how close to eye level the photo is and whether
+    the eye shows come from Claude, frame by frame, on the sheets "vues"
+    (a frame that was not on them takes the notes of the nearest that was).
+    The focus on the eye comes from Claude too: seen at full resolution on
+    the sheets "yeux" when the eye is near the focus point, more roughly on
+    the sheets "vues" otherwise (4 at most, then). A frame that was on no
+    sheet and whose eye should show gets the note of the noted frame nearest
+    in measured sharpness, less SOFTER points each time its sharpness is
+    half of that one's. A frame whose eye does not show has no note for it.
+    The best frame has the highest total, the focus on the eye counting
+    double."""
+    import math
+    sharp, rated, shown = burst['sharp'], burst['rated'], burst['shown']
+    place = {name: k for k, name in enumerate(names)}
+    said = {str(view.get('numero', '')).strip(): view for view in answer.get('vues') or []}
+    judged = {name: _note(said.get(_number(name), {}).get('oeil_net'))
+              for name in names if name in sharp}
+    judged = {name: note if name in burst['eyes'] else min(note, 4)
+              for name, note in judged.items() if note}
+    if shown not in judged and _number(shown) not in said and _note(answer.get('oeil_net')):
+        # no word of it frame by frame: the note given for the frame shown large
+        judged[shown] = _note(answer.get('oeil_net'))
+    top = max(sharp.values()) or 1.0
+
+    def log(name):
+        return math.log2(max(sharp[name], 1e-6))
+
+    notes = {}
+    for name in (name for name in names if name in sharp):
+        near = min(rated, key=lambda other: abs(place[other] - place[name]))
+        # (a frame Claude said nothing of: the notes of the sequence)
+        view = said.get(_number(near)) or {'degage': answer.get('degage'),
+                                           'hauteur_oeil': answer.get('hauteur_oeil')}
+        eye = judged.get(name)
+        if eye is None and judged and view.get('oeil_visible', True) and _number(name) not in said:
+            like = min(judged, key=lambda other: abs(log(other) - log(name)))
+            eye = min(5, max(1, round(judged[like] + SOFTER * (log(name) - log(like)))))
+        notes[name] = {'eye': eye, 'clear': _note(view.get('degage')),
+                       'level': _note(view.get('hauteur_oeil')),
+                       'sharp': round(sharp[name] / top, 3), 'best': 0}
+    best = max(notes, key=lambda name: (2 * (notes[name]['eye'] or 0) + (notes[name]['clear'] or 0)
+                                        + (notes[name]['level'] or 0) + notes[name]['sharp']))
+    notes[best]['best'] = 1
+    return notes, best
+
+
+def _groups_of(names, notes):
+    """the frames of a sequence by the notes they share: [(notes, names)]"""
+    groups = {}
+    for name in names:
+        mine = notes.get(name) or {}
+        key = tuple((column, mine.get(column)) for column in ('eye', 'clear', 'level', 'best'))
+        groups.setdefault(key if mine else (), []).append(name)
+    return [(dict(key), group) for key, group in groups.items()]
 
 
 # ---------------------------------------------------------------------------
@@ -586,7 +826,8 @@ def ebird_text(seq):
 def prompt_for(seq, images, rows, instructions):
     names = seq['names']
     times = [t for t in (_when(rows.get(name, {})) for name in names) if t]
-    row = rows.get(names[len(names) // 2], {})
+    burst = seq.get('burst')
+    row = rows.get(burst['shown'] if burst else names[len(names) // 2], {})
     focal = _focal(row)
     gear = ', '.join(part for part in (str(row.get('Model') or ''), _lens(row)) if part)
     if seq['bird']:
@@ -602,7 +843,9 @@ def prompt_for(seq, images, rows, instructions):
                  + ". Nomme-les dans le titre ou la description, sans dire qui est qui si rien "
                    "ne le montre ; ne cherche à reconnaître personne d'autre.")
     return PROMPT.format(
-        images='\n'.join(images), views=VIEWS + (SHEETS if len(images) > 2 else '') + '.',
+        images='\n'.join(images),
+        views=(VIEWS.replace(*SHARPEST) + BURST if burst
+               else VIEWS + (SHEETS if len(images) > 2 else '')) + '.',
         count=len(names), start=f'{min(times):%Y-%m-%d %H:%M:%S}' if times else '?',
         end=f'{max(times):%Y-%m-%d %H:%M:%S}' if times else '?',
         gear=f' ({gear})' if gear else '', kind=kind, ebird=ebird_text(seq),
@@ -872,7 +1115,12 @@ def document(gap=None, force=False, dry_run=False, index_only=False, backup=True
         def describe(index, seq):
             if budget and spent['total'] >= budget:
                 raise _OverBudget()
-            images = _pictures(seq['names'], tmpdir, index, rows, keep)
+            if seq['bird'] and len(seq['names']) > 1:
+                # every frame of a burst is measured and shown to Claude
+                images, seq['burst'] = burst_pictures(
+                    seq['names'], lambda name: _image(name, big=True), rows, tmpdir, index, keep)
+            else:
+                images = _pictures(seq['names'], tmpdir, index, rows, keep)
             middle = seq['names'][len(seq['names']) // 2]
             if (not seq['bird'] and not dry_run and faces.available()
                     and 'preview' in staged.get(middle, {})):
@@ -886,8 +1134,15 @@ def document(gap=None, force=False, dry_run=False, index_only=False, backup=True
             with lock:
                 spent['total'] += cost
             kept, checklist = settle(seq, answer, data)
+            if seq.get('burst'):
+                seq['notes'], seq['rep'] = frame_notes(seq['names'], seq['burst'], answer)
+                if seq['rep'] != seq['burst']['shown'] and not dry_run:
+                    # the best frame stands for the sequence: its preview
+                    keep(seq['rep'], _image(seq['rep'], big=True), True)
             if not (dry_run or index_only):
-                write_files(file_tags(answer, kept, checklist), seq['names'], rows, backup)
+                for notes, group in _groups_of(seq['names'], seq.get('notes') or {}):
+                    write_files(file_tags(answer, dict(kept, **notes), checklist), group, rows,
+                                backup)
                 kept['written'] = kept['described']
             if not dry_run:
                 thumbs(seq['names'])
@@ -916,6 +1171,11 @@ def document(gap=None, force=False, dry_run=False, index_only=False, backup=True
                     flags.append('absente de la liste')
                 elif kept['on_checklist']:
                     flags.append('sur la liste')
+                if seq.get('rep'):
+                    mine = seq['notes'][seq['rep']]
+                    flags.append(f"meilleure vue {_number(seq['rep'])} : "
+                                 f"œil net {mine['eye'] or '?'}/5, dégagé {mine['clear'] or '?'}/5, "
+                                 f"hauteur d'œil {mine['level'] or '?'}/5")
                 print(f'{head}\n    {answer["titre"]}  [{", ".join(flags)}]'
                       f'\n    {answer["description"]}'
                       + (f'\n    eBird : {kept["note"]}' if kept['note'] else ''))
@@ -933,7 +1193,7 @@ def document(gap=None, force=False, dry_run=False, index_only=False, backup=True
         for seq in done:
             seqs.append(seq)
             answers[len(seqs) - 1] = said_of(seq, rows, data)
-            middle = seq['names'][len(seq['names']) // 2]
+            middle = stands_for(seq, own_notes(seq, rows))
             for name in seq['names']:
                 try:
                     keep(name, _image(name, big=name == middle), name == middle)
@@ -1214,11 +1474,13 @@ def _archive_pictures(frames, full, tmpdir, row, sheet):
     return paths
 
 
-def describe_sequence(seq_id, model=None, effort=None, sheet=12):
+def describe_sequence(seq_id, model=None, effort=None, sheet=12, progress=None):
     """Have Claude describe one sequence of the index, where its files are
     (the button of the search page): its row in the index, as a dict, and the
     cost in dollars at API prices. The answer goes to the index, and waits
-    there for write_sequence to put it into the files. Raises RuntimeError
+    there for write_sequence to put it into the files. Every frame of a burst
+    of bird photos is read, to note each one (progress(done, total) as they
+    are); of another sequence, only the middle frame. Raises RuntimeError
     when the sequence cannot be read (the archive drive is not mounted)."""
     cfg = _cfg()
     path = write_template(instructions_path(), quiet=True)
@@ -1246,8 +1508,25 @@ def describe_sequence(seq_id, model=None, effort=None, sheet=12):
     data = _ebird.load()
     # the clock offset the index found with the days around is kept
     locate([seq], data, rows, clock=stored['clock_offset'] or 0.0)
+    exifs = {middle['name']: exif}
     with tempfile.TemporaryDirectory() as tmpdir:
-        images = _archive_pictures(frames, full, tmpdir, rows[middle['name']], sheet)
+        if bird and len(frames) > 1:
+            # a burst: the focus point and the full image of every frame
+            where = {frame['name']: photoindex.resolve(frame['path']) for frame in frames}
+            found = read_exif([path for path in where.values() if path])
+            for name, path in where.items():
+                if path and path in found:
+                    exifs[name] = found[path]
+                    rows[name] = dict(rows.get(name, {}), **found[path])
+
+            def load(name):
+                return _image(where[name], big=True)
+
+            images, seq['burst'] = burst_pictures(
+                names, load, rows, tmpdir, 0,
+                lambda name, img, big: photoindex.save_images(img, name, preview=big), progress)
+        else:
+            images = _archive_pictures(frames, full, tmpdir, rows[middle['name']], sheet)
         if not bird and faces.available():
             # who is in the picture, from the faces named in the search page
             from PIL import Image
@@ -1258,10 +1537,27 @@ def describe_sequence(seq_id, model=None, effort=None, sheet=12):
                                   model or cfg.get('keywords_model'),
                                   effort or cfg.get('doc_effort'))
     kept, _ = settle(seq, answer, data)
+    notes, best = {}, None
+    if seq.get('burst'):
+        notes, best = frame_notes(names, seq['burst'], answer)
+        if best != seq['burst']['shown']:
+            # the best frame stands for the sequence: the viewer opens on it
+            try:
+                photoindex.save_images(_image(where[best], big=True), best, preview=True)
+            except Exception:
+                pass
     # 'pending': the files do not hold it yet (write_sequence)
-    photoindex.put(db, [dict(kept, name=name, written='pending') for name in names]
-                   + [{'name': middle['name'], 'camera': seq['camera'], 'lens': _lens(exif),
-                       'focal': _focal(exif) or None, 'zone': seq['zone']}])
+    records = []
+    for name in names:
+        record = dict(kept, name=name, written='pending')
+        if best:
+            record.update(notes.get(name) or notes[best], rep=int(name == best),
+                          best=int(name == best))
+        if name in exifs:
+            record.update(camera=str(exifs[name].get('Model') or ''), lens=_lens(exifs[name]),
+                          focal=_focal(exifs[name]) or None, zone=_zone(exifs[name]))
+        records.append(record)
+    photoindex.put(db, records)
     row = dict(db.execute('SELECT * FROM photos WHERE seq = ? AND rep = 1', (seq_id,)).fetchone())
     db.close()
     return row, cost
@@ -1287,14 +1583,20 @@ def write_sequence(seq_id, progress=None, chunk=6):
         # a place found from the position of the photos themselves
         checklist = geo.Spot(row['location'], row['county'] or '', row['state'] or '',
                              row['country'] or '', row['lat'], row['lon'])
-    args = file_tags(answer_of(row), dict(row, note=row['note'] or ''), checklist)
-    if not args:
+    said = dict(row, note=row['note'] or '')
+    if not file_tags(answer_of(row), said, checklist):
         raise RuntimeError("la base n'a rien à écrire pour cette séquence (ni description, "
                            'ni liste eBird)')
     paths = {frame['name']: photoindex.resolve(frame['path']) for frame in frames}
     todo = [name for name in paths if paths[name]]
     if not todo:
         raise RuntimeError("les fichiers sont hors d'atteinte (le disque d'archive est-il monté ?)")
+    # the frames of a burst each have their notes: they are written by groups
+    #   of frames that share them
+    notes = {frame['name']: {key: frame[key] for key in ('eye', 'clear', 'level', 'best')}
+             for frame in frames}
+    groups = [(file_tags(answer_of(row), dict(said, **mine), checklist), group)
+              for mine, group in _groups_of(todo, notes)]
     # the frames of a sequence come from one camera: the middle one says
     #   whether they carry a position of their own
     middle = paths[todo[len(todo) // 2]]
@@ -1303,15 +1605,17 @@ def write_sequence(seq_id, progress=None, chunk=6):
     db.execute("UPDATE photos SET written = 'pending' WHERE seq = ?", (seq_id,))
     db.commit()
     done = 0
-    for start in range(0, len(todo), chunk):
-        part = todo[start:start + chunk]
-        write_files(args, [paths[name] for name in part], rows, backup=bool(cfg.get('gui_backup')))
-        db.execute(f'UPDATE photos SET written = ? WHERE name IN ({", ".join("?" * len(part))})',
-                   [datetime.now().isoformat(' ', 'seconds')] + part)
-        db.commit()
-        done += len(part)
-        if progress:
-            progress(done, len(todo))
+    for args, group in groups:
+        for start in range(0, len(group), chunk):
+            part = group[start:start + chunk]
+            write_files(args, [paths[name] for name in part], rows,
+                        backup=bool(cfg.get('gui_backup')))
+            db.execute(f'UPDATE photos SET written = ? WHERE name IN ({", ".join("?" * len(part))})',
+                       [datetime.now().isoformat(' ', 'seconds')] + part)
+            db.commit()
+            done += len(part)
+            if progress:
+                progress(done, len(todo))
     db.close()
     return done
 

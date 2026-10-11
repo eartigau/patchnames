@@ -11,7 +11,13 @@ const $ = (id) => document.getElementById(id);
 const FIELDS = ["section", "q", "species", "person", "place", "region", "year", "since", "until", "topic",
                 "eye", "clear", "level", "flag", "sort"];
 const PAGE = 60;
-const state = { items: [], offset: 0, done: false, loading: false, token: 0, current: -1, checklist: "", total: 0 };
+const state = { items: [], offset: 0, done: false, loading: false, token: 0, current: -1, checklist: "", total: 0,
+                frames: [] };
+// (state.names: the names offered for a face, those the photographer starts
+// with and those given so far)
+const NEW = "\u0000nouveau";      // the choice "ajouter un nom" of a face
+// the notes of a bird photo, 1 to 5: column of the index, what the page calls it
+const NOTES = [["eye", "œil net"], ["clear", "dégagé"], ["level", "hauteur d'œil"]];
 // the batch of the button above the results: how many finished sequences
 // this page has taken in, its timer, and when the button was first clicked
 const batch = { since: 0, timer: null, armed: 0 };
@@ -32,6 +38,7 @@ function el(tag, attrs, ...kids) {
 const split = (text) => (text || "").split("; ").map((word) => word.trim()).filter(Boolean);
 const number = (n) => Number(n || 0).toLocaleString("fr-CA");
 const image = (kind, name) => `/${kind}/${encodeURIComponent(name)}`;
+const badge = (text, kind) => el("span", { class: "badge" + (kind ? " " + kind : ""), text });
 
 function region(photo) {
   return [photo.county, photo.state, photo.country_name].filter(Boolean).join(", ");
@@ -305,7 +312,55 @@ function show(name) {
   state.shown = name;       // the frame on screen: the one the file buttons act on
   $("viewerImg").src = image("preview", name);
   loadFaces();
-  for (const img of $("viewerStrip").children) img.classList.toggle("on", img.dataset.name === name);
+  for (const cell of $("viewerStrip").children) cell.classList.toggle("on", cell.dataset.name === name);
+  showNotes();
+}
+
+// the notes of the frame on screen. The frames of a burst of bird photos are
+// noted one by one (one of them is then its best); in a sequence noted
+// before that, or of a single frame, the notes are those of the sequence.
+function noteBadges(photo) {
+  const best = state.frames.find((frame) => frame.best);
+  const frame = (best && state.frames.find((item) => item.name === state.shown)) || photo;
+  const out = NOTES.filter(([key]) => frame[key]).map(([key, label]) =>
+    badge(`${label} ${frame[key]}/5`, frame[key] >= 4 ? "good" : frame[key] <= 2 ? "warn" : ""));
+  if (best && frame.best) out.push(badge("★ meilleure vue de la rafale", "good"));
+  else if (best) {
+    out.push(el("span", { class: "badge link", text: "→ meilleure vue", title: "Afficher la meilleure vue de la rafale",
+                          onclick: () => show(best.name) }));
+  }
+  return out;
+}
+
+function showNotes() {
+  const box = $("frameNotes"), photo = state.items[state.current];
+  if (box && photo) box.replaceChildren(...noteBadges(photo));
+}
+
+// the strip of the frames of the sequence on screen, each with its notes
+async function loadStrip(photo, index) {
+  if (photo.seq_n <= 1) return;
+  const frames = await (await fetch("/api/sequence?seq=" + encodeURIComponent(photo.seq))).json();
+  if (state.current !== index || !Array.isArray(frames)) return;
+  state.frames = frames;
+  const rated = frames.some((frame) => frame.best);
+  $("viewerStrip").replaceChildren(...frames.map((frame) => {
+    const img = el("img", { src: image("thumb", frame.name), loading: "lazy", alt: frame.name });
+    const said = NOTES.filter(([key]) => frame[key]).map(([key, label]) => `${label} ${frame[key]}/5`).join(" · ");
+    const cell = el("div", {
+      class: "frame" + (frame.best ? " best" : ""),
+      title: [frame.name, rated && said, frame.best && "Meilleure vue de la rafale",
+              rated && frame.sharp && `Netteté mesurée au point de mise au point : ${Math.round(100 * frame.sharp)} % de la vue la plus nette`]
+        .filter(Boolean).join("\n"),
+      onclick: () => show(frame.name),
+    }, img, rated && el("span", { class: "notes", text: (frame.best ? "★ " : "")
+      + NOTES.map(([key]) => frame[key] || "·").join(" ") }));
+    cell.dataset.name = frame.name;
+    cell.classList.toggle("on", frame.name === state.shown);
+    img.addEventListener("error", () => cell.remove());
+    return cell;
+  }));
+  showNotes();
 }
 
 async function openViewer(index) {
@@ -316,23 +371,13 @@ async function openViewer(index) {
   $("viewer").hidden = false;
   document.body.style.overflow = "hidden";
   $("viewerStrip").replaceChildren();
+  state.frames = [];
   $("viewerImg").alt = photo.title || photo.name;
   show(photo.name);
   $("viewerInfo").replaceChildren(...info(photo));
   $("viewerInfo").scrollTop = 0;
   showPeople();
-  if (photo.seq_n > 1) {
-    const frames = await (await fetch("/api/sequence?seq=" + encodeURIComponent(photo.seq))).json();
-    if (state.current !== index || !Array.isArray(frames)) return;
-    $("viewerStrip").replaceChildren(...frames.map((frame) => {
-      const img = el("img", { src: image("thumb", frame.name), loading: "lazy", alt: frame.name,
-                              title: frame.name, onclick: () => show(frame.name) });
-      img.dataset.name = frame.name;
-      img.classList.toggle("on", frame.name === photo.name);
-      img.addEventListener("error", () => img.remove());
-      return img;
-    }));
-  }
+  await loadStrip(photo, index);
 }
 
 function closeViewer() {
@@ -407,6 +452,7 @@ async function nameFace(face, person, born) {
   const reply = await post("/api/face", { id: face.id, person, born });
   if (reply.error) { state.faceNote = reply.error; return showPeople(); }
   state.faceList = reply.faces;
+  state.names = reply.names || reply.people.map(([name]) => name);
   $("personList").replaceChildren(...reply.people.map(([name]) => el("option", { value: name })));
   const index = state.current;
   if (index >= 0 && reply.photo && state.items[index].seq === reply.photo.seq) Object.assign(state.items[index], reply.photo);
@@ -414,19 +460,45 @@ async function nameFace(face, person, born) {
   drawFaces();
 }
 
-// the rows of the faces in the panel: a number, a name to give, the year of birth
+// the rows of the faces in the panel: a number, a name to choose (those the
+// photographer starts with, those given so far, or a new one to type), the
+// year of birth
 function showPeople() {
   const box = $("peopleRows");
   if (!box) return;
   box.replaceChildren(state.faceNote && el("p", { class: "mono", text: state.faceNote }),
     ...(state.faceList || []).map((face, k) => {
-      const who = el("input", { class: "field", list: "personList", value: face.person || "",
-                                placeholder: "qui est-ce ?", "aria-label": "Nom du visage " + (k + 1) });
+      const names = [...new Set([...(state.names || []), face.person].filter(Boolean))];
+      const who = el("select", { class: "field", "aria-label": "Nom du visage " + (k + 1) },
+        el("option", { value: "", text: "qui est-ce ?" }),
+        names.map((name) => el("option", { value: name, text: name })),
+        el("option", { value: NEW, text: "+ ajouter un nom…" }));
+      who.value = face.person || "";
+      const typed = el("input", { class: "field", placeholder: "nouveau nom", hidden: "hidden",
+                                  "aria-label": "Nouveau nom pour le visage " + (k + 1) });
       const born = el("input", { class: "field born", inputmode: "numeric", maxlength: "4", value: face.born || "",
                                  placeholder: "né en", title: "Année de naissance : la reconnaissance en tient compte (un enfant change vite, et personne n'est cherché avant sa naissance)" });
-      const give = () => nameFace(face, who.value, born.value);
-      for (const input of [who, born]) input.addEventListener("keydown", (event) => { if (event.key === "Enter") give(); });
-      return el("div", { class: "who" }, el("span", { class: "n", text: String(k + 1) }), who, born,
+      const chosen = () => (chosenNew() ? typed.value.trim() : who.value === NEW ? "" : who.value);
+      const give = () => { if (chosen()) nameFace(face, chosen(), born.value); };
+      // "ajouter un nom": a field to type it takes the place of the list
+      // (Escape, or leaving it empty, brings the list back)
+      const list = () => { typed.hidden = true; who.hidden = false; who.value = face.person || ""; };
+      who.addEventListener("change", () => {
+        if (who.value !== NEW) return give();        // a name of the list is given at once
+        who.hidden = true;
+        typed.hidden = false;
+        typed.focus();
+      });
+      typed.addEventListener("keydown", (event) => {
+        if (event.key !== "Escape") return;
+        event.stopPropagation();
+        typed.value = "";
+        list();
+      });
+      typed.addEventListener("blur", () => { if (!typed.value.trim() && who.hidden) list(); });
+      const chosenNew = () => !typed.hidden;
+      for (const input of [typed, born]) input.addEventListener("keydown", (event) => { if (event.key === "Enter") give(); });
+      return el("div", { class: "who" }, el("span", { class: "n", text: String(k + 1) }), who, typed, born,
         el("button", { class: "pill", type: "button", text: face.person && face.sure !== 1 ? "Oui" : "Nommer",
                        title: face.person && face.sure !== 1 ? "Confirmer le nom proposé" : "Donner ce nom à ce visage", onclick: give }),
         face.person && el("button", { class: "pill", type: "button", text: face.sure === 1 ? "Retirer" : "Non",
@@ -445,9 +517,14 @@ async function work(photo, what) {
     if (state.current === index) $("viewerInfo").replaceChildren(...info(photo));
   };
   const update = (fresh) => {
+    // (the best frame of a burst now stands for it: it is the one to show)
+    const moved = fresh.name !== photo.name;
     Object.assign(photo, fresh);
     refresh(index);
-    if (state.current === index) show(state.shown || photo.name);    // its preview may be new
+    if (state.current === index) {
+      show(moved ? photo.name : state.shown || photo.name);          // its preview may be new
+      loadStrip(photo, index);
+    }
     batchButton();
   };
   say(what === "describe" ? "Claude regarde la séquence…" : "Écriture dans les fichiers…", true);
@@ -467,7 +544,11 @@ async function work(photo, what) {
         shown = true;
       }
       if (job.state === "error") return say(job.error, false);
-      if (job.state === "writing") {
+      if (job.state === "running" && job.frames) {
+        say(job.measured < job.frames
+          ? `Lecture des vues de la rafale, pour noter chacune : ${job.measured} sur ${job.frames}…`
+          : "Claude regarde la séquence…", true);
+      } else if (job.state === "writing") {
         say(job.files ? `Écriture dans les fichiers : ${job.written} sur ${job.files}…` : "Écriture dans les fichiers…", true);
       } else if (job.state === "done") {
         update(job.photo);
@@ -506,19 +587,16 @@ async function listSpecies(photo, box) {
 
 function info(photo) {
   const out = [el("h2", { text: photo.title || "Pas encore décrite" })];
-  const badge = (text, kind) => el("span", { class: "badge" + (kind ? " " + kind : ""), text });
   const badges = [];
   if (photo.species && photo.certainty) {
     badges.push(badge("identification : " + photo.certainty, photo.certainty === "sûre" ? "good" : "warn"));
   }
   if (photo.on_checklist === 1) badges.push(badge("sur la liste eBird", "good"));
   if (photo.on_checklist === 0) badges.push(badge("absente de la liste eBird", "alert"));
-  for (const [key, label] of [["eye", "œil net"], ["clear", "dégagé"], ["level", "hauteur d'œil"]]) {
-    if (photo[key]) badges.push(badge(`${label} ${photo[key]}/5`, photo[key] >= 4 ? "good" : photo[key] <= 2 ? "warn" : ""));
-  }
   if (photo.topic) badges.push(badge(photo.topic));
   if (photo.seq_n > 1) badges.push(badge(photo.seq_n + " vues"));
   if (badges.length) out.push(el("div", { class: "badges" }, badges));
+  out.push(el("div", { class: "badges", id: "frameNotes" }, noteBadges(photo)));
   if (photo.description) out.push(el("p", { text: photo.description }));
   if (photo.note) out.push(el("p", { class: "note", text: "Par rapport à la liste : " + photo.note }));
   if (!photo.described) {
@@ -529,7 +607,7 @@ function info(photo) {
     out.push(el("div", { class: "actions" },
       el("button", { class: "pill go", type: "button", disabled: photo.busy && "disabled",
                      text: photo.described ? "Identifier de nouveau avec Claude" : "Identifier la séquence avec Claude",
-                     title: "Un appel à Claude, environ 20 s ; la réponse est écrite dans la base et dans l'en-tête des fichiers de la séquence",
+                     title: "Un appel à Claude, environ 20 s (pour une rafale d'oiseau, chaque vue est d'abord lue et notée) ; la réponse est écrite dans la base et dans l'en-tête des fichiers de la séquence",
                      onclick: () => work(photo, "describe") }),
       (photo.described || photo.checklist) && el("button", { class: "pill", type: "button", disabled: photo.busy && "disabled",
                      text: "Écrire dans les fichiers",
@@ -660,6 +738,7 @@ async function start() {
   state.claude = facets.claude;
   state.rawApp = facets.raw_app;
   state.facesCan = facets.faces;
+  state.names = facets.names || (facets.people || []).map(([name]) => name);
   state.panoCan = facets.pano;
   for (const [name] of facets.people || []) $("personList").append(el("option", { value: name }));
   $("viewerImg").addEventListener("load", drawFaces);

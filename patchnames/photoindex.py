@@ -46,6 +46,8 @@ COLUMNS = ('name', 'path', 'stem', 'ext',
            'certainty',
            'eye', 'clear', 'level',    # a bird photo, 1 to 5: the focus on the eye, how
                                        #   clear of branches the bird is, how close to eye level
+           'sharp', 'best',            # in a burst: the sharpness measured at the focus point
+                                       #   (1 for the sharpest frame), and 1 for its best frame
            'people',           # the people the photographer named in the photo
            'guessed',          # those faces.py proposes, not confirmed
            'faces',            # how many faces were found in it; NULL if nobody looked
@@ -60,7 +62,8 @@ COLUMNS = ('name', 'path', 'stem', 'ext',
 
 TYPES = {'clock_offset': 'REAL', 'zone': 'REAL', 'focal': 'REAL', 'lat': 'REAL', 'lon': 'REAL',
          'bird': 'INTEGER', 'seq_n': 'INTEGER', 'rep': 'INTEGER', 'on_checklist': 'INTEGER',
-         'eye': 'INTEGER', 'clear': 'INTEGER', 'level': 'INTEGER', 'faces': 'INTEGER'}
+         'eye': 'INTEGER', 'clear': 'INTEGER', 'level': 'INTEGER', 'faces': 'INTEGER',
+         'sharp': 'REAL', 'best': 'INTEGER'}
 
 PHOTOS = ('(id INTEGER PRIMARY KEY, '
           + ', '.join(f'{column} {TYPES.get(column, "TEXT")}' for column in COLUMNS)
@@ -124,6 +127,7 @@ def connect():
     os.makedirs(index_dir(), exist_ok=True)
     db = sqlite3.connect(db_path(), timeout=60)
     db.row_factory = sqlite3.Row
+    _shared(db)
     _retype(db)
     db.executescript(SCHEMA)
     # a column added since the index was made
@@ -133,6 +137,21 @@ def connect():
             db.execute(f'ALTER TABLE photos ADD COLUMN {column} {TYPES.get(column, "TEXT")}')
     _relative(db)
     return db
+
+
+def _shared(db):
+    """let the index be read while it is written: the search page, patchdoc
+    in a terminal and DuckDB may all have it open. With the write-ahead log
+    of SQLite a reader never makes a writer wait, nor a writer a reader;
+    with its default journal, a reader that lingers stops a write, and a
+    write stopped half-way locks every reader out. An index on a network
+    drive, where that log does not work, keeps the journal it has."""
+    try:
+        if db.execute('PRAGMA journal_mode').fetchone()[0].lower() != 'wal':
+            db.execute('PRAGMA journal_mode = WAL')
+        db.execute('PRAGMA synchronous = NORMAL')
+    except sqlite3.OperationalError:
+        pass
 
 
 def _retype(db):
@@ -511,7 +530,8 @@ def facets(db):
 def sequence(db, seq):
     """the frames of a sequence, in order"""
     return [dict(row) for row in db.execute(
-        'SELECT name, path, taken, rep FROM photos WHERE seq = ? ORDER BY taken, name', (seq,))]
+        'SELECT name, path, taken, rep, eye, clear, level, sharp, best FROM photos '
+        'WHERE seq = ? ORDER BY taken, name', (seq,))]
 
 
 def checklist(db, sid):

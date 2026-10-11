@@ -446,20 +446,55 @@
   flex-shrink: 0;
 }
 
-.viewer-strip img {
-  width: 78px;
-  height: 52px;
-  object-fit: cover;
+.viewer-strip .frame {
+  flex: 0 0 auto;
   border-radius: 6px;
   border: 1px solid var(--line);
+  overflow: hidden;
   cursor: pointer;
   opacity: 0.6;
 }
 
-.viewer-strip img.on,
-.viewer-strip img:hover {
+.viewer-strip .frame img {
+  display: block;
+  width: 78px;
+  height: 52px;
+  object-fit: cover;
+}
+
+.viewer-strip .frame.on,
+.viewer-strip .frame:hover {
   opacity: 1;
   border-color: var(--accent);
+}
+
+/* the notes of each frame of a burst: eye, clear, eye level; a star on the best */
+.viewer-strip .notes {
+  display: block;
+  padding: 1px 0 2px;
+  color: var(--muted);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.64rem;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.viewer-strip .frame.best {
+  border-color: rgba(108, 226, 173, 0.7);
+}
+
+.viewer-strip .frame.best .notes {
+  color: #6ce2ad;
+}
+
+.badge.link {
+  color: var(--accent);
+  border-color: rgba(98, 194, 255, 0.45);
+  cursor: pointer;
+}
+
+#frameNotes:empty {
+  display: none;
 }
 
 .viewer-info {

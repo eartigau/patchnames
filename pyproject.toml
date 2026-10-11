@@ -7,7 +7,7 @@ name = "patchnames"
 version = "0.1.0"
 description = "Rename, describe and archive photo/video files using EXIF metadata, Claude and eBird"
 requires-python = ">=3.8"
-dependencies = ["pillow"]
+dependencies = ["pillow", "numpy"]
 
 [project.optional-dependencies]
 # patchdoc finds and compares faces, and stitches panoramas, with OpenCV,

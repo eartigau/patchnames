@@ -149,6 +149,51 @@ Comment cela marche :
   de nouveau (`--force`), seulement indexées. `--index-only` décrit et
   indexe sans toucher aux fichiers.
 
+### Les notes d'une photo d'oiseau, et la meilleure vue d'une rafale
+
+Une photo d'oiseau reçoit trois notes de 1 à 5 (5 est le mieux) : la netteté
+de la mise au point sur l'œil, à quel point l'oiseau est dégagé, et à quel
+point la photo est prise à la hauteur de son œil. Elles sont écrites dans le
+fichier en mots-clés (`œil net 4/5`) et dans une hiérarchie Lightroom
+(`Qualité|Œil net|4`), et servent de filtres dans la page de recherche.
+
+Dans une rafale, chaque vue a ses propres notes, pour trouver la meilleure
+du lot :
+
+- `patchdoc` lit chaque vue en pleine résolution et mesure sa netteté là où
+  l'appareil a fait le point.
+- Claude voit, dans le même appel, toutes les vues recadrées autour de leur
+  point de mise au point (16 par planche, 96 vues au plus ; au-delà, une vue
+  prend les notes de sa voisine), et les douze vues les plus nettes en
+  pleine résolution, un carré de 512 pixels autour du point de mise au
+  point. Il dit pour chaque vue si l'œil se voit, sa netteté, le dégagement
+  et la hauteur d'œil.
+- L'œil est jugé en pleine résolution quand il est près du point de mise au
+  point ; sinon sur la vue réduite, plus grossièrement, et sa note ne
+  dépasse alors pas 4. Une vue où l'œil ne se voit pas n'a pas de note
+  d'œil ; une vue que l'oiseau a quittée n'en a aucune.
+- La meilleure vue est celle dont le total est le plus haut, l'œil comptant
+  double. Elle porte le mot-clé `meilleure vue` (`Qualité|Meilleure vue`)
+  et c'est elle qui représente la séquence dans la page : la tuile, les
+  filtres par note et la visionneuse s'ouvrent sur elle.
+- Dans la visionneuse, chaque vue de la bande porte ses trois notes (œil,
+  dégagé, hauteur ; un point quand il n'y en a pas) et une étoile marque la
+  meilleure ; les notes affichées suivent la vue à l'écran.
+
+Ce qu'il faut en savoir :
+
+- La netteté mesurée dépend de ce qui se trouve sous le point de mise au
+  point (un plumage contrasté « mesure » plus net qu'une joue unie) : elle
+  sert à choisir les vues montrées en grand et à départager deux vues à
+  égalité, pas à noter.
+- Le titre, la description et les mots-clés valent pour la séquence : ils
+  sont les mêmes dans toutes ses vues.
+- Une séquence décrite avant cette version garde pour toutes ses vues les
+  notes de sa vue du milieu ; « Identifier de nouveau avec Claude » la note
+  vue par vue.
+- Une rafale montre plus d'images à Claude qu'une séquence ordinaire (voir
+  « Ce que cela consomme »).
+
 ### Les panoramas
 
 Une séquence prise en tournant l'appareil, chaque vue recouvrant la
@@ -179,6 +224,11 @@ au prix de l'API :
 | `--effort low` | 0,08 $ | les mêmes |
 | `--model sonnet --effort low` | 0,05 $ | les mêmes |
 | `--model haiku --effort low` | 0,003 $ | les mêmes espèces, moins sûr de lui, descriptions moins justes |
+
+Une rafale d'oiseau coûte davantage, parce que chaque vue est montrée :
+mesuré avec le modèle par défaut, 0,22 $ pour une rafale de 11 vues et
+0,17 $ pour une de 7 vues ; 0,005 $ avec `--model haiku --effort low`, moins
+sûr quand il juge l'œil (il en a manqué un bien visible aux essais).
 
 Chaque passage annonce ce qu'il compte dépenser, et s'arrête à `doc_budget`
 (10 $ ; `--budget`, 0 pour aucun plafond) : les séquences restantes
@@ -232,8 +282,9 @@ de la liste, photos d'oiseaux sans liste).
   la netteté de la mise au point sur l'œil, à quel point l'oiseau est
   dégagé, et à quel point la photo est prise à la hauteur de son œil. Ces
   notes sont aussi des mots-clés (`œil net 4/5`) et une hiérarchie Lightroom
-  (`Qualité|Œil net|4`). Elles valent pour la vue que Claude a regardée,
-  celle du milieu de la séquence.
+  (`Qualité|Œil net|4`). Dans une rafale, chaque vue a les siennes et les
+  filtres portent sur la meilleure (voir « Les notes d'une photo
+  d'oiseau »).
 - **Carte des lieux.** Un disque par lieu, avec son nombre de séquences ;
   les disques se regroupent quand on dézoome et se séparent quand on zoome.
   Un clic sur un regroupement zoome dessus, un clic sur un lieu le choisit
@@ -262,7 +313,10 @@ sur votre machine, par deux petits modèles d'OpenCV téléchargés une fois
 
 - Dans la visionneuse, « Montrer les visages » met un carré sur chaque
   visage de la vue affichée. Vous donnez un nom à un visage, avec si vous
-  le voulez l'année de naissance de la personne.
+  le voulez l'année de naissance de la personne. Le nom se choisit dans
+  une liste : d'abord ceux de la config `people`
+  (`{"people": ["Alice", "Bob"]}` dans votre `config.json`), puis ceux
+  déjà donnés, puis « + ajouter un nom… » pour en taper un nouveau.
 - Ce visage devient un exemple, daté par sa photo. Les autres visages lui
   sont comparés et le nom est proposé, avec un point d'interrogation, là où
   la ressemblance est forte ; « Oui » le confirme, « Non » l'écarte pour de
@@ -302,6 +356,9 @@ l'appel à Claude le demandent.
   plus) avec sa liste eBird. La réponse arrive en une vingtaine de secondes
   dans la page et dans la base, puis elle est écrite dans l'en-tête de
   chaque fichier de la séquence, avec le lieu et la position de la liste.
+  Pour une rafale d'oiseau, chaque vue est d'abord lue sur le disque
+  d'archive pour être notée (la page dit où elle en est) : environ 4 s par
+  vue sur un disque réseau, mesuré sur six vues.
   Sur un disque réseau, cette écriture récrit chaque fichier et peut prendre
   des minutes pour une longue rafale ; la page dit où elle en est, et une
   écriture coupée par l'arrêt du serveur reprend à son prochain démarrage.
@@ -330,7 +387,11 @@ l'appel à Claude le demandent.
 - **SQLite plutôt que DuckDB.** La page lit la base pendant que `patchdoc` y
   écrit, ce qu'un fichier DuckDB n'accepte pas entre deux processus, et sa
   recherche plein texte suit chaque ajout. Les colonnes sont typées : DuckDB
-  lit le fichier tel quel pour vos propres analyses.
+  lit le fichier tel quel pour vos propres analyses. La base tient son
+  journal en mode « write-ahead » : une lecture (la page, DuckDB, un script
+  à vous) ne fait jamais attendre une écriture, ni une écriture une
+  lecture ; `photos.sqlite-wal` et `photos.sqlite-shm` vivent donc à côté
+  de `photos.sqlite`.
 
   ```python
   import os
@@ -390,6 +451,7 @@ disque est en réseau.
   "photo_archive_mounts": [],
   "bird_focal_min": 200,
   "doc_budget": 10,
+  "people": [],
   "index_dir": "~/photo/patchdoc",
   "ebird_dir": "~/.config/patchnames/ebird",
   "ebird_search": ["~/Downloads/ebird_*.zip", "~/Downloads/MyEBirdData*.csv"]

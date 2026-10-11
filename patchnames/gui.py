@@ -91,6 +91,15 @@ def _db():
     return db
 
 
+def _names(db):
+    """the names the page offers for a face: those of config 'people', to
+    start with, then everybody named so far"""
+    first = [str(name).strip() for name in _config_module.load().get('people') or []
+             if str(name).strip()]
+    known = [row[0] for row in db.execute('SELECT name FROM people ORDER BY name COLLATE NOCASE')]
+    return first + [name for name in known if name not in first]
+
+
 def _public(row):
     """a photo as the page gets it: its path where it can be read now, or as
     the index keeps it (relative to the archive) when it cannot"""
@@ -222,7 +231,9 @@ def _work(seq, ask):
 
     try:
         if ask:
-            _, cost = describe_sequence(seq)
+            # (the frames of a burst of bird photos are read one by one first)
+            _, cost = describe_sequence(
+                seq, progress=lambda done, total: tell(measured=done, frames=total))
             with _lock:
                 _spent['total'] += cost
         tell(state='writing', photo=photo(), written=0, files=0)
@@ -388,7 +399,8 @@ class Handler(BaseHTTPRequestHandler):
                               faces=__import__('patchnames.faces', fromlist=['x']).available(),
                               pano=__import__('patchnames.pano', fromlist=['x']).available(),
                               claude={'each': each, 'spent': _spent['total'],
-                                      'budget': float(cfg.get('doc_budget') or 0)})
+                                      'budget': float(cfg.get('doc_budget') or 0)},
+                              names=_names(db))
                 db.close()
                 facets['regions'] = [(state, country, country_name(country or ''), count)
                                      for state, country, count in facets['regions']]
@@ -467,7 +479,8 @@ class Handler(BaseHTTPRequestHandler):
                                      'WHERE name = ?) AND rep = 1', (face['photo'],)).fetchone()
                     self._send(200, {'faces': faces.of_photo(db, face['photo']),
                                      'photo': _public(dict(row)) if row else None,
-                                     'people': photoindex.facets(db)['people']})
+                                     'people': photoindex.facets(db)['people'],
+                                     'names': _names(db)})
                 db.close()
                 return
             if self.path == '/api/batch/stop':
