@@ -10,14 +10,24 @@ The page (gui/index.html, app.js) asks for:
     /api/checklist?sid=      an eBird checklist and its species
     /thumb/NAME /preview/NAME   the images of a photo
     /api/reveal, /api/open   (POST) show a photo in the Finder, open it
+    /api/describe            (POST) have Claude describe a sequence
+    /api/job?id=             how that is going
 
-Thumbnails and previews come from the index folder; one that is missing is
-made from the photo itself when its file can be reached (the archive drive
-mounted), and kept.
+Thumbnails and previews come from the index folder, a local store that makes
+browsing fast and needs no drive; one that is missing is made from the photo
+itself when its file can be reached (the archive drive mounted), and kept.
+While the page is served the store fills itself in the background: the frame
+that stands for each sequence, the newest first (config 'gui_fill_thumbs').
+
+The button "Identifier la séquence avec Claude" of the viewer runs
+doc.describe_sequence: one Claude call, its answer kept in the index (the
+files are not written). What the calls of a session cost is added up and
+they stop at config 'doc_budget'.
 
 The server listens on 127.0.0.1 only, answers only to its own address (so
-that no other site can reach it through the browser), and the two actions
-that touch the machine take a photo of the index, never a path.
+that no other site can reach it through the browser), and the actions that
+touch the machine or call Claude take a photo of the index, never a path,
+and a header a page of another site cannot send.
 """
 
 import json
@@ -42,6 +52,11 @@ FILTERS = ('q', 'species', 'place', 'region', 'year', 'since', 'until', 'topic',
 #: images made from the photos at the same time, at most (the archive may be
 #:  a slow network drive)
 _making = threading.Semaphore(4)
+#: the thumbnails of the sequences: how many the store has, out of how many
+_store = {'have': 0, 'total': 0, 'filling': False}
+#: the sequences Claude was asked to describe from the page, {seq: state}, and
+#:  what that cost since the server started
+_jobs, _lock, _spent = {}, threading.Lock(), {'total': 0.0}
 
 
 def _db():
@@ -53,10 +68,21 @@ def _db():
 
 
 def _public(row):
-    """a photo as the page gets it"""
+    """a photo as the page gets it: its path where it can be read now, or as
+    the index keeps it (relative to the archive) when it cannot"""
     out = {key: value for key, value in row.items() if key != 'place_norm'}
     out['country_name'] = country_name(row.get('country') or '') if row.get('country') else ''
+    full = photoindex.resolve(row.get('path'))
+    out['reachable'] = bool(full)
+    out['path'] = full or row.get('path')
     return out
+
+
+def _archive():
+    """where the archive is expected, and where it is mounted now (None if
+    it is not)"""
+    roots = photoindex.roots()
+    return {'roots': roots, 'mounted': next((root for root in roots if os.path.isdir(root)), None)}
 
 
 def _image_file(name, kind):
@@ -68,17 +94,56 @@ def _image_file(name, kind):
     db = _db()
     row = db.execute('SELECT path FROM photos WHERE name = ?', (name,)).fetchone()
     db.close()
-    if row is None or not row['path'] or not os.path.isfile(row['path']):
+    full = photoindex.resolve(row['path']) if row else None
+    if not full or not os.path.isfile(full):
         return None
     from .keywords import _image
     with _making:
         if not os.path.isfile(path):
             try:
-                photoindex.save_images(_image(row['path'], big=kind == 'preview'), name,
+                photoindex.save_images(_image(full, big=kind == 'preview'), name,
                                        preview=kind == 'preview')
             except Exception:
                 return None
     return path if os.path.isfile(path) else None
+
+
+def _fill(stop):
+    """make the thumbnails the store lacks, the newest sequences first, two
+    at a time so that the page keeps most of the drive; waits while the
+    archive is not mounted"""
+    from concurrent.futures import ThreadPoolExecutor
+    db = _db()
+    rows = db.execute('SELECT name FROM photos WHERE rep = 1 '
+                      'ORDER BY COALESCE(local, taken) DESC').fetchall()
+    db.close()
+    todo = [row['name'] for row in rows if not os.path.isfile(photoindex.thumb_path(row['name']))]
+    _store.update(total=len(rows), have=len(rows) - len(todo), filling=bool(todo))
+
+    def make(name):
+        while not stop.is_set() and not _archive()['mounted']:
+            stop.wait(60)
+        if not stop.is_set() and _image_file(name, 'thumb'):
+            _store['have'] += 1
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(make, todo))
+    _store['filling'] = False
+
+
+def _describe(seq):
+    """the work of the button: Claude's description of a sequence, kept in
+    the index; its state goes to _jobs"""
+    from .doc import describe_sequence
+    try:
+        row, cost = describe_sequence(seq)
+        with _lock:
+            _spent['total'] += cost
+            _jobs[seq] = {'state': 'done', 'photo': _public(row), 'cost': cost,
+                          'spent': _spent['total']}
+    except Exception as exc:
+        with _lock:
+            _jobs[seq] = {'state': 'error', 'error': str(exc)}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -111,7 +176,7 @@ class Handler(BaseHTTPRequestHandler):
         port = self.server.server_address[1]
         if self.headers.get('Host') in (f'127.0.0.1:{port}', f'localhost:{port}'):
             return True
-        self._send(403, {'error': 'not this server'})
+        self._send(403, {'error': "ce n'est pas ce serveur"})
         return False
 
     def do_GET(self):
@@ -127,7 +192,7 @@ class Handler(BaseHTTPRequestHandler):
                 if os.path.isfile(path):
                     self._file(path)
                 else:
-                    self._send(404, {'error': 'no such file'})
+                    self._send(404, {'error': 'fichier introuvable'})
             elif url.path.startswith(('/thumb/', '/preview/')):
                 kind, name = url.path.strip('/').split('/', 1)
                 name = os.path.basename(unquote(name))
@@ -135,10 +200,16 @@ class Handler(BaseHTTPRequestHandler):
                 if path:
                     self._file(path, cache=True)
                 else:
-                    self._send(404, {'error': 'no image'})
+                    self._send(404, {'error': "pas d'image"})
             elif url.path == '/api/facets':
                 db = _db()
-                facets = dict(photoindex.facets(db), index=photoindex.index_dir())
+                from .doc import _cost_guess
+                cfg = _config_module.load()
+                each = _cost_guess(cfg.get('keywords_model'), cfg.get('doc_effort'))[0]
+                facets = dict(photoindex.facets(db), index=photoindex.index_dir(),
+                              archive=_archive(), thumbs=dict(_store),
+                              claude={'each': each, 'spent': _spent['total'],
+                                      'budget': float(cfg.get('doc_budget') or 0)})
                 db.close()
                 facets['regions'] = [(state, country, country_name(country or ''), count)
                                      for state, country, count in facets['regions']]
@@ -160,8 +231,11 @@ class Handler(BaseHTTPRequestHandler):
                 db = _db()
                 self._send(200, photoindex.checklist(db, args.get('sid', '')) or {})
                 db.close()
+            elif url.path == '/api/job':
+                with _lock:
+                    self._send(200, _jobs.get(args.get('id', ''), {'state': 'unknown'}))
             else:
-                self._send(404, {'error': 'not found'})
+                self._send(404, {'error': 'introuvable'})
         except (BrokenPipeError, ConnectionResetError):
             pass
         except Exception as exc:
@@ -171,39 +245,68 @@ class Handler(BaseHTTPRequestHandler):
         if not self._local():
             return
         # a header no other site can send without asking first, and never gets
-        if self.headers.get('X-Patchdoc') != '1' or self.path not in ('/api/reveal', '/api/open'):
-            self._send(403, {'error': 'refused'})
+        if self.headers.get('X-Patchdoc') != '1' or self.path not in (
+                '/api/reveal', '/api/open', '/api/describe'):
+            self._send(403, {'error': 'refusé'})
             return
         try:
             body = json.loads(self.rfile.read(int(self.headers.get('Content-Length') or 0)))
             db = _db()
-            row = db.execute('SELECT path FROM photos WHERE name = ?',
+            row = db.execute('SELECT path, seq FROM photos WHERE name = ?',
                              (str(body.get('name')),)).fetchone()
             db.close()
-            if row is None or not row['path'] or not os.path.exists(row['path']):
-                self._send(404, {'error': 'the file cannot be reached (the archive drive?)'})
+            if self.path == '/api/describe':
+                budget = float(_config_module.load().get('doc_budget') or 0)
+                if row is None:
+                    self._send(404, {'error': 'photo inconnue'})
+                elif budget and _spent['total'] >= budget:
+                    self._send(200, {'error': f'Le budget de {budget:g} $ de cette session est '
+                                              'dépensé (config doc_budget ; relancez patchdoc gui '
+                                              'pour repartir de zéro).'})
+                else:
+                    with _lock:
+                        running = _jobs.get(row['seq'], {}).get('state') == 'running'
+                        _jobs[row['seq']] = {'state': 'running'}
+                    if not running:
+                        threading.Thread(target=_describe, args=(row['seq'],), daemon=True).start()
+                    self._send(200, {'job': row['seq']})
+                return
+            full = photoindex.resolve(row['path']) if row else None
+            if not full:
+                self._send(404, {'error': "le fichier est hors d'atteinte (le disque d'archive "
+                                          'est-il monté ?)'})
                 return
             if sys.platform == 'darwin':
-                subprocess.run(['open'] + (['-R'] if self.path == '/api/reveal' else [])
-                               + [row['path']], capture_output=True)
+                subprocess.run(['open'] + (['-R'] if self.path == '/api/reveal' else []) + [full],
+                               capture_output=True)
             self._send(200, {'ok': True})
         except Exception as exc:
             self._send(500, {'error': str(exc)})
 
 
-def serve(port=None, browser=True):
-    """run the search page until Ctrl-C"""
-    port = int(port or _config_module.load()['gui_port'])
+def serve(port=None, browser=True, fill=None):
+    """run the search page until Ctrl-C (fill: make the missing thumbnails in
+    the background; None as config 'gui_fill_thumbs' says)"""
+    cfg = _config_module.load()
+    port = int(port or cfg['gui_port'])
+    fill = cfg.get('gui_fill_thumbs', True) if fill is None else fill
     photoindex.connect().close()        # make the index if there is none yet
     try:
         server = ThreadingHTTPServer(('127.0.0.1', port), Handler)
     except OSError as exc:
-        print(f'Port {port} is taken ({exc}); try `patchdoc gui --port {port + 1}`.')
+        print(f'Le port {port} est pris ({exc}) ; essayez `patchdoc gui --port {port + 1}`.')
         return
     server.daemon_threads = True
     url = f'http://127.0.0.1:{port}/'
-    print(f'patchdoc: the search page is at {url}  (Ctrl-C to stop)')
-    print(f'  index: {photoindex.index_dir()}')
+    archive = _archive()
+    print(f'patchdoc : la page de recherche est à {url}  (Ctrl-C pour arrêter)')
+    print(f'  index : {photoindex.index_dir()}')
+    print(f"  archive : {archive['mounted'] or 'non montée (' + ', '.join(archive['roots']) + ')'}")
+    stop = threading.Event()
+    if fill:
+        print('  vignettes : celles qui manquent sont faites en arrière-plan (--no-vignettes '
+              'pour ne pas le faire)')
+        threading.Thread(target=_fill, args=(stop,), daemon=True).start()
     if browser:
         threading.Timer(0.4, webbrowser.open, (url,)).start()
     try:
@@ -211,4 +314,5 @@ def serve(port=None, browser=True):
     except KeyboardInterrupt:
         print()
     finally:
+        stop.set()
         server.server_close()

@@ -45,7 +45,8 @@ patchnames time-offset '*.NEF'      # prompts interactively
 patchnames patchdate '*.jpg'        # prompts for YYMMDD
 
 # The same, with every photo described by Claude and the birds identified
-# with your eBird checklists (see below), and the page to search them
+# with your eBird checklists, and the page to search them (see below; that
+# part is in French, like everything patchdoc says)
 patchdoc
 patchdoc gui
 ```
@@ -88,110 +89,203 @@ patchnames --keywords            # describe, then rename and archive as usual
 - Set `"keywords_auto": true` in the config to describe before every
   `patchnames` run.
 
-## patchdoc: every photo described, the birds identified with eBird
+## patchdoc : chaque photo décrite, les oiseaux identifiés avec eBird
 
-`patchdoc` does what `patchnames` does (rename, archive) and, on the way,
-has Claude describe every photo. A photo taken beyond 200 mm is looked at as
-a bird photo: Claude tries to name the species, with your eBird checklists as
-a prior. The result goes into the files themselves and into an index, which
-`patchdoc gui` searches by species, place, date, subject or any word.
+(Cette section est en français, comme tout ce que `patchdoc` affiche.)
 
-```bash
-cd /path/to/new/photos
-patchdoc --dry-run     # show what Claude says, change nothing
-patchdoc               # describe, write into the files, rename, archive, index
-patchdoc gui           # the search page, in the browser
-```
-
-How it works:
-
-- **Sequences.** The photos are grouped into sequences (a new one after 30 s
-  without a shot, `--gap`), the bird photos (focal length above
-  `bird_focal_min`, 200 mm; `--min-focal`) apart from the others. One Claude
-  call per sequence, three at a time (`--jobs`): about 20 s and $0.10 at API
-  prices per sequence, whatever its length.
-- **eBird as a prior.** Most bird photos are taken while a checklist is being
-  filled. The checklist whose hours hold a sequence gives its place and the
-  species noted there; Claude gets that list (and the other lists of the day)
-  with the photo. It is a prior, not the answer: Claude is told that the
-  list may be wrong or incomplete, names what it sees, and says in one
-  sentence when the photo does not fit the list. A sequence whose species is
-  not on its checklist is flagged (`absent de la liste eBird`), one that is
-  not sure gets `identification à confirmer`.
-- **A camera clock that is off.** A camera left on the time of another
-  country, or on the wrong side of a daylight saving change, is off by whole
-  hours. For each day, the offset that puts the most sequences inside
-  checklists is looked for and applied before matching, and said at the
-  start of the run. It has to make sense with the time zone the camera
-  records (a Nikon Z does): a camera on Montréal time in Sweden is 6 h
-  behind, not 3. A camera that records no zone only gets a correction that
-  holds over several days; `--clock 6` sets it yourself (`--clock 0` for
-  none).
-- **What is written into each file** (as `patchnames keywords` does, with
-  exiftool; `--no-backup` to skip the `<file>_original` copies): title,
-  description, keywords (species in French and Latin, habitat, subject), a
-  Lightroom hierarchy (Espèce, Espèce latine, Habitat, Sujet), the place
-  (location, county, state, country) and the checklist as the IPTC event
-  (`eBird S123456789`).
-- **Your explanations** are the same file as for `patchnames keywords`:
-  `~/.config/patchnames/keywords.md` (`--instructions` for another one).
-- A sequence Claude could not describe stays in the folder: run `patchdoc`
-  again. Photos that already have a title are not described again
-  (`--force`), only indexed. `--index-only` describes and indexes without
-  touching the files, to try it in a folder of the archive.
-
-### The eBird data
-
-`patchdoc` uses the newest "Download My Data" export it finds: a
-`ebird_*.zip` in `~/Downloads` (config `ebird_search`) is copied to
-`~/.config/patchnames/ebird/`. When the photos are newer than the export, a
-new one is asked for before describing (`--no-refresh` to skip, `--refresh`
-to force):
+`patchdoc` fait ce que fait `patchnames` (renommer, archiver) et, au passage,
+demande à Claude de décrire chaque photo. Une photo prise au-delà de 200 mm
+est regardée comme une photo d'oiseau : Claude essaie de nommer l'espèce,
+avec vos listes eBird comme a priori. Le résultat est écrit dans les
+fichiers eux-mêmes et dans un index, que `patchdoc gui` permet de fouiller
+par espèce, lieu, date, sujet ou n'importe quel mot.
 
 ```bash
-patchdoc ebird             # what data is on disk, which accounts are known
-patchdoc ebird --login     # keep the eBird and mailbox accounts in the macOS keychain
-patchdoc ebird --refresh   # ask eBird for a new export and wait for it
+cd /chemin/des/nouvelles/photos
+patchdoc --dry-run     # essai : montrer ce que dit Claude, ne rien changer
+patchdoc               # décrire, écrire dans les fichiers, renommer, archiver, indexer
+patchdoc gui           # la page de recherche, dans le navigateur
 ```
 
-eBird sends the link of an export by email, a few minutes after the request.
-With the eBird account in the keychain, the request is sent for you;
-without it, the eBird page opens in the browser and you click "Request My
-Observations". With the mailbox account in the keychain (IMAP; Proton Mail
-Bridge on `127.0.0.1:1143` by default, config `imap_host` and `imap_port`),
-the link is read from the email and the zip downloaded; without it, open the
-link yourself: the zip is picked up when it lands in `~/Downloads`. The
-passwords live in the macOS keychain only (or in `PATCHNAMES_EBIRD_USER`,
+Comment cela marche :
+
+- **Séquences.** Les photos sont groupées en séquences (une nouvelle après
+  30 s sans prise de vue, `--gap`), les photos d'oiseaux (focale au-delà de
+  `bird_focal_min`, 200 mm ; `--min-focal`) à part des autres. Un appel à
+  Claude par séquence, quelle que soit sa longueur, trois à la fois
+  (`--jobs`), environ 15 s chacun.
+- **eBird comme a priori.** La plupart des photos d'oiseaux sont prises
+  pendant qu'une liste est remplie. La liste dont les heures contiennent une
+  séquence donne son lieu et les espèces notées ; Claude reçoit cette liste
+  (et les autres listes du jour) avec la photo. C'est un a priori, pas la
+  réponse : Claude sait que la liste peut être fausse ou incomplète, nomme
+  ce qu'il voit, et dit en une phrase quand la photo ne s'accorde pas avec
+  la liste. Une séquence dont l'espèce n'est pas sur sa liste est signalée
+  (`absent de la liste eBird`), une identification incertaine reçoit
+  `identification à confirmer`.
+- **Une horloge d'appareil décalée.** Un appareil resté à l'heure d'un autre
+  pays, ou du mauvais côté d'un changement d'heure, est décalé d'un nombre
+  entier d'heures. Pour chaque jour, le décalage qui place le plus de
+  séquences dans des listes est cherché, appliqué, et annoncé au début du
+  passage. Il doit s'accorder avec le fuseau que l'appareil enregistre (un
+  Nikon Z le fait) : un appareil à l'heure de Montréal en Suède a 6 h de
+  retard, pas 3. Un appareil qui n'enregistre pas de fuseau ne reçoit qu'une
+  correction qui tient sur plusieurs jours ; `--clock 6` la fixe vous-même
+  (`--clock 0` pour aucune).
+- **Ce qui est écrit dans chaque fichier** (comme `patchnames keywords`,
+  avec exiftool ; `--no-backup` pour ne pas garder les copies
+  `<fichier>_original`) : titre, description, mots-clés (espèce en français
+  et en latin, habitat, sujet), une hiérarchie Lightroom (Espèce, Espèce
+  latine, Habitat, Sujet), le lieu (lieu, comté, province, pays) et la liste
+  comme événement IPTC (`eBird S123456789`).
+- **Vos explications** sont le même fichier que pour `patchnames keywords` :
+  `~/.config/patchnames/keywords.md` (`--instructions` pour un autre).
+- Une séquence que Claude n'a pas pu décrire reste dans le dossier :
+  relancez `patchdoc`. Les photos qui ont déjà un titre ne sont pas décrites
+  de nouveau (`--force`), seulement indexées. `--index-only` décrit et
+  indexe sans toucher aux fichiers.
+
+### Ce que cela consomme
+
+Seules les photos du dossier courant sont montrées à Claude, et la
+séquence pour laquelle vous cliquez « Identifier la séquence avec Claude »
+dans la page de recherche ; `patchdoc index` et `patchdoc vignettes` ne
+l'appellent jamais.
+`patchdoc` passe par la commande `claude` (votre compte Claude Code) : avec
+un abonnement, rien n'est facturé à l'appel, mais chaque séquence compte
+dans vos limites d'utilisation. Mesuré sur quatre séquences, en dollars US
+au prix de l'API :
+
+| réglage | par séquence | réponses |
+|---|---|---|
+| modèle par défaut de `claude` (Opus 5.5) | 0,10 $ | référence |
+| `--effort low` | 0,08 $ | les mêmes |
+| `--model sonnet --effort low` | 0,05 $ | les mêmes |
+| `--model haiku --effort low` | 0,003 $ | les mêmes espèces, moins sûr de lui, descriptions moins justes |
+
+Chaque passage annonce ce qu'il compte dépenser, et s'arrête à `doc_budget`
+(10 $ ; `--budget`, 0 pour aucun plafond) : les séquences restantes
+attendent dans le dossier le passage suivant. Pour changer le réglage une
+fois pour toutes, dans `~/.config/patchnames/config.json` :
+
+```json
+{"keywords_model": "sonnet", "doc_effort": "low", "doc_budget": 5}
+```
+
+### Les données eBird
+
+`patchdoc` utilise le plus récent export « Download My Data » qu'il trouve :
+un `ebird_*.zip` de `~/Downloads` (config `ebird_search`) est copié dans
+`~/.config/patchnames/ebird/`. Quand les photos sont plus récentes que
+l'export, un nouvel export est demandé avant de décrire (`--no-refresh` pour
+s'en passer, `--refresh` pour le forcer) :
+
+```bash
+patchdoc ebird             # les données sur disque, les comptes connus
+patchdoc ebird --login     # garder les comptes eBird et courriel dans le trousseau de macOS
+patchdoc ebird --refresh   # demander un nouvel export à eBird et l'attendre
+```
+
+eBird envoie le lien d'un export par courriel, quelques minutes après la
+demande. Avec le compte eBird dans le trousseau, la demande est faite pour
+vous ; sans lui, la page eBird s'ouvre dans le navigateur et vous cliquez
+sur « Request My Observations ». Avec le compte de la boîte courriel dans
+le trousseau (IMAP ; Proton Mail Bridge sur `127.0.0.1:1143` par défaut,
+config `imap_host` et `imap_port`), le lien est lu dans le courriel et le
+zip téléchargé ; sans lui, ouvrez le lien vous-même : le zip est pris dès
+qu'il arrive dans `~/Downloads`. Ctrl-C met fin à l'attente et le passage
+continue avec les données sur disque. Les mots de passe ne vivent que dans
+le trousseau de macOS (ou dans `PATCHNAMES_EBIRD_USER`,
 `PATCHNAMES_EBIRD_PASSWORD`, `PATCHNAMES_IMAP_USER`,
-`PATCHNAMES_IMAP_PASSWORD`), never in a file.
+`PATCHNAMES_IMAP_PASSWORD`), jamais dans un fichier.
 
-### The search page
+### La page de recherche et sa base de données
 
-`patchdoc gui` opens http://127.0.0.1:8765/ (`--port`), served to this
-machine only. Each tile is a sequence; a click shows the photo, the full
-description, the species, the place, the eBird checklist with its species,
-and the file (Show in Finder, Open). Filters: free text, species, place,
-region, year and dates, subject, telephoto or not, and what needs a look
-(identification to confirm, species not on the checklist, bird photos
-without a checklist).
+`patchdoc gui` ouvre http://127.0.0.1:8765/ (`--port`), servie à cette
+machine seulement. Chaque tuile est une séquence ; un clic montre la photo,
+la description complète, les espèces, le lieu, la liste eBird avec ses
+espèces, et le fichier (Afficher dans le Finder, Ouvrir). Filtres : texte
+libre, espèce, lieu, région, année et dates, sujet, téléobjectif ou non, et
+ce qui demande un coup d'oeil (identification à confirmer, espèce absente
+de la liste, photos d'oiseaux sans liste).
 
-The index, with its thumbnails and previews, is in `~/photo/patchdoc`
-(config `index_dir`), so searching needs neither the archive drive nor the
-raw files. Two ways to fill it with what is already archived:
+La page n'interroge pas les disques mais une base de données locale :
+`~/photo/patchdoc/photos.sqlite` (config `index_dir`), avec à côté un dépôt
+local de vignettes (`thumbs/`, 360 px) et d'aperçus (`previews/`, 1600 px).
+La recherche et la navigation marchent donc sans le disque d'archive ; seuls
+l'ouverture d'un fichier, la fabrication d'une vignette qui manque et
+l'appel à Claude le demandent.
+
+- **Le dépôt de vignettes se remplit tout seul.** Tant que la page est
+  servie et que le disque est monté, les vignettes qui manquent sont faites
+  en arrière-plan, celle de chaque séquence, les plus récentes d'abord ; la
+  page dit où il en est (`patchdoc gui --no-vignettes` ou la config
+  `gui_fill_thumbs` pour s'en passer). `patchdoc vignettes` fait la même
+  chose sans la page.
+- **« Identifier la séquence avec Claude ».** Dans la visionneuse, ce bouton
+  montre la séquence à Claude là où sont ses fichiers (la vue du milieu,
+  l'agrandissement au point de mise au point, une planche de douze vues au
+  plus) avec sa liste eBird, et remplace ce que la base en dit. Un appel :
+  environ 20 s, au coût annoncé sous le bouton ; les appels d'une session
+  s'arrêtent à `doc_budget`. La réponse va dans la base, pas dans les
+  fichiers : pour l'écrire aussi dans les fichiers, passez `patchdoc
+  --force` dans leur dossier.
+
+- **Des photos sur des disques externes ou réseau.** Le chemin d'une photo
+  archivée est gardé relatif à l'archive. Si l'archive n'est pas toujours
+  montée au même endroit (le disque branché directement, un autre montage
+  réseau), donnez les autres endroits dans la config : le premier qui est là
+  est utilisé, pour chercher comme pour archiver.
+
+  ```json
+  {"photo_archive_root": "~/mnt/URUBU/photo", "photo_archive_mounts": ["/Volumes/URUBU/photo"]}
+  ```
+
+- **SQLite plutôt que DuckDB.** La page lit la base pendant que `patchdoc` y
+  écrit, ce qu'un fichier DuckDB n'accepte pas entre deux processus, et sa
+  recherche plein texte suit chaque ajout. Les colonnes sont typées : DuckDB
+  lit le fichier tel quel pour vos propres analyses.
+
+  ```python
+  import os
+  import duckdb
+  base = os.path.expanduser('~/photo/patchdoc/photos.sqlite')
+  con = duckdb.connect()
+  con.execute(f"ATTACH '{base}' AS idx (TYPE sqlite, READ_ONLY)")
+  con.sql("SELECT substr(taken, 1, 4) AS annee, count(*) AS photos, "
+          "count(DISTINCT checklist) AS listes FROM idx.photos GROUP BY 1 ORDER BY 1").show()
+  ```
+
+  Tables : `photos` (une ligne par fichier ; `rep = 1` pour la vue qui
+  représente sa séquence), `tags`, `checklists` et `observations` (vos
+  données eBird).
+
+Ce qui remplit la base avec ce qui est déjà archivé, sans jamais appeler
+Claude :
 
 ```bash
-patchdoc index                                    # the whole archive, from the file names alone
-patchdoc index --exif ~/mnt/URUBU/photo/2026_10   # read what the files of a folder say of themselves
+patchdoc index                                    # toute l'archive, d'après les noms des fichiers
+patchdoc index --exif ~/mnt/URUBU/photo/2026_10   # lire ce que les fichiers d'un dossier disent d'eux-mêmes
+patchdoc index --rematch                          # refaire l'accord avec les listes eBird (après un nouvel export)
+patchdoc vignettes --year 2026                    # faire d'avance les vignettes (disque monté)
 ```
 
-The first takes a few minutes: the name of a photo gives its date and time,
-its folder says whether it was taken with a bird lens, and the eBird
-checklists give the place. Such photos are not described, but they can be found by place and
-date, and by the species of their checklist (the box under the filters). The
-second reads the title, description and keywords already written into the
-files (by `patchdoc` or `patchnames keywords`), and the camera and lens;
-count a second or two per photo on a network drive. It works day by day and
-skips what it has read, so it can be stopped and started again.
+La première prend quelques minutes : le nom d'une photo donne sa date et son
+heure, son dossier dit si elle a été prise au téléobjectif, et les listes
+eBird donnent le lieu. Ces photos ne sont pas décrites, mais on les trouve
+par lieu et par date, et par les espèces de leur liste (la case sous les
+filtres). La deuxième lit le titre, la description et les mots-clés déjà
+écrits dans les fichiers (par `patchdoc` ou `patchnames keywords`), ainsi
+que l'appareil et l'objectif ; comptez une ou deux secondes par photo sur un
+disque réseau. Elle travaille jour par jour et saute ce qu'elle a déjà lu :
+on peut l'arrêter et la relancer. La troisième refait, d'après la base
+seule et en une seconde, l'accord de chaque séquence avec les listes eBird :
+utile quand une liste a été saisie après l'indexation de ses photos. La
+quatrième fait les vignettes des vues
+qui représentent les séquences (`--all` pour toutes les vues, `--previews`
+pour l'image de la visionneuse), les plus récentes d'abord ; sans elle, une
+vignette est faite la première fois qu'elle est affichée, lentement si le
+disque est en réseau.
 
 ## Configuration
 
@@ -207,7 +301,9 @@ skips what it has read, so it can be stopped and started again.
     "EA": ["D90", "NIKON Z 50", "NIKON Z50_2"]
   },
   "bird_lenses": ["200-500mm", "300mm"],
+  "photo_archive_mounts": [],
   "bird_focal_min": 200,
+  "doc_budget": 10,
   "index_dir": "~/photo/patchdoc",
   "ebird_dir": "~/.config/patchnames/ebird",
   "ebird_search": ["~/Downloads/ebird_*.zip", "~/Downloads/MyEBirdData*.csv"]

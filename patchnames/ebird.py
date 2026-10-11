@@ -26,12 +26,16 @@ sequences (leaving zero and coming back to it included), so that a day that
 says little follows its neighbours. No offset is preferred when nothing says
 otherwise. An offset also has to make sense (EBird._fits): the camera was
 set somewhere, so with an offset of several hours it shows the time of a
-place that far east or west of the checklist. That place has to be the zone
-the camera says it is set to (EXIF OffsetTimeOriginal). A camera that does
-not say gets more caution: the place has to be one of the checklists of the
-year before, and a day counts for LONE sequences at most, so that one day
-alone never moves the clock (an afternoon of photos away from any checklist,
-an eclipse, would otherwise be pulled into the checklist of the morning).
+place that far east or west of the checklist. A camera that records the
+time zone it is set to (EXIF OffsetTimeOriginal) is off by the difference
+between that zone and the zone of the checklist, read in the time zone
+database of the system, and by nothing else: in Sweden on Swedish time it is
+right, and photos taken twenty minutes after a list ended are not pulled
+into it by an hour that happens to fit. A camera that does not say gets
+more caution: the place has to be one of the checklists of the year before,
+and a day counts for LONE sequences at most, so that one day alone never
+moves the clock (an afternoon of photos away from any checklist, an
+eclipse, would otherwise be pulled into the checklist of the morning).
 
 A match, EBird.match(), is 'inside' (the corrected time is within the hours
 of a checklist, MARGIN minutes around), 'near' (within NEAR minutes of one),
@@ -100,6 +104,46 @@ def _clean(text, limit=300):
 
 
 _countries = None
+_zones = None
+
+
+def zone_table():
+    """{country code: [(latitude, longitude, time zone name)]}, the zones of
+    each country and their reference towns, from the time zone database of
+    the system (zone.tab); {} without one"""
+    global _zones
+    if _zones is not None:
+        return _zones
+    _zones = {}
+    try:
+        import zoneinfo
+        places = list(zoneinfo.TZPATH) + ['/usr/share/zoneinfo']
+    except ImportError:
+        return _zones
+    try:
+        import tzdata
+        places.append(os.path.join(os.path.dirname(tzdata.__file__), 'zoneinfo'))
+    except ImportError:
+        pass
+    spot = re.compile(r'([+-])(\d\d)(\d\d)(\d\d)?([+-])(\d\d\d)(\d\d)(\d\d)?')
+    for place in places:
+        for name in ('zone.tab', 'zone1970.tab'):
+            path = os.path.join(place, name)
+            if _zones or not os.path.isfile(path):
+                continue
+            with open(path, encoding='utf-8') as handle:
+                for line in handle:
+                    parts = line.rstrip('\n').split('\t')
+                    found = spot.fullmatch(parts[1]) if len(parts) > 2 else None
+                    if line.startswith('#') or not found:
+                        continue
+                    g = found.groups()
+                    lat = int(g[1]) + int(g[2]) / 60 + int(g[3] or 0) / 3600
+                    lon = int(g[5]) + int(g[6]) / 60 + int(g[7] or 0) / 3600
+                    for code in parts[0].split(','):
+                        _zones.setdefault(code, []).append(
+                            (lat if g[0] == '+' else -lat, lon if g[4] == '+' else -lon, parts[2]))
+    return _zones
 
 
 def country_name(code):
@@ -192,6 +236,28 @@ class EBird:
         # day and solar time zone (longitude / 15) of every checklist, by day
         pairs = sorted((c.day, c.lon / 15) for c in self.lists.values() if c.lon is not None)
         self._days, self._solar, self._been = [d for d, _ in pairs], [z for _, z in pairs], {}
+        self._utc = {}
+
+    def utc_offset(self, checklist):
+        """hours from UTC at the place and on the day of a checklist: the time
+        zone of its country whose reference town is the closest (most
+        countries have one zone; in a large one, a place by a zone border may
+        get its neighbour's); None without a time zone database"""
+        if checklist.sid not in self._utc:
+            hours, zones = None, zone_table().get(checklist.country)
+            if zones and checklist.lat is not None:
+                shrink = math.cos(math.radians(checklist.lat))
+                name = min(zones, key=lambda z: (z[0] - checklist.lat) ** 2
+                           + ((z[1] - checklist.lon) * shrink) ** 2)[2]
+                try:
+                    import zoneinfo
+                    noon = datetime(checklist.day.year, checklist.day.month, checklist.day.day, 12)
+                    when = (checklist.start or noon).replace(tzinfo=zoneinfo.ZoneInfo(name))
+                    hours = when.utcoffset().total_seconds() / 3600
+                except Exception:
+                    hours = None
+            self._utc[checklist.sid] = hours
+        return self._utc[checklist.sid]
 
     def _around(self, local):
         """the checklists of the day of a local time and of the days next to it
@@ -208,17 +274,21 @@ class EBird:
         to a time zone (hours from UTC; None if the photos do not say).
 
         No offset always does: the camera shows the time of the place. With
-        a zone, the place would be in the zone `zone + offset`, and the
-        zones of the world run from about 1.5 h behind to 3 h ahead of the
-        solar time of their longitude (Montréal -0.1 and +0.9 h, Madrid
-        +2.2 h in summer). Without a zone, an hour is a daylight saving
-        change; more is a camera still on the time of another place, which
-        has to be one of the checklists of the 400 days before, as far east
-        or west as the offset says, within 1.5 h."""
+        a zone, the place would be in the zone `zone + offset`, which has to
+        be its own (utc_offset); if the system cannot tell, a zone within
+        reach of the solar time of its longitude, the zones of the world
+        running from about 1.5 h behind it to 3 h ahead (Montréal -0.1 and
+        +0.9 h, Madrid +2.2 h in summer). Without a zone, an hour is a
+        daylight saving change; more is a camera still on the time of
+        another place, which has to be one of the checklists of the 400
+        days before, as far east or west as the offset says, within 1.5 h."""
         if not offset or checklist.lon is None:
             return True
         solar = checklist.lon / 15
         if zone is not None:
+            there = self.utc_offset(checklist)
+            if there is not None:
+                return abs(zone + offset - there) < 0.01
             return -1.5 <= (zone + offset - solar + 12) % 24 - 12 <= 3.0
         if abs(offset) <= 1:
             return True
@@ -366,8 +436,8 @@ def find_export(quiet=True):
         return None
     if newest[1] != target:
         if not quiet:
-            print(f'eBird data: {newest[1]} ({datetime.fromtimestamp(newest[0]):%Y-%m-%d %H:%M})'
-                  f' copied to {target}')
+            print(f'Données eBird : {newest[1]} '
+                  f'({datetime.fromtimestamp(newest[0]):%Y-%m-%d %H:%M}) copié vers {target}')
         _import(newest[1], newest[0])
     return target
 
@@ -412,26 +482,28 @@ def login():
     """ask for the eBird and mailbox accounts and keep them in the macOS
     keychain; the passwords are typed into the `security` command itself"""
     if sys.platform != 'darwin':
-        print('No keychain here: set PATCHNAMES_EBIRD_USER, PATCHNAMES_EBIRD_PASSWORD, '
-              'PATCHNAMES_IMAP_USER and PATCHNAMES_IMAP_PASSWORD instead.')
+        print('Pas de trousseau ici : définissez plutôt PATCHNAMES_EBIRD_USER, '
+              'PATCHNAMES_EBIRD_PASSWORD, PATCHNAMES_IMAP_USER et PATCHNAMES_IMAP_PASSWORD.')
         return
     cfg = _cfg()
-    asked = (('ebird', 'eBird user name', 'the eBird password'),
-             ('imap', f'Mailbox user name (IMAP at {cfg["imap_host"]}:{cfg["imap_port"]}; for Proton '
-                      'Mail Bridge, the one of its "Mailbox details")',
-              'the IMAP password (for Proton Mail Bridge, the one of the Bridge, not of Proton)'))
+    asked = (('ebird', "Nom d'utilisateur eBird", 'le mot de passe eBird'),
+             ('imap', f'Nom d\'utilisateur de la boîte courriel (IMAP à {cfg["imap_host"]}:'
+                      f'{cfg["imap_port"]} ; pour Proton Mail Bridge, celui de ses '
+                      '« Mailbox details »)',
+              'le mot de passe IMAP (pour Proton Mail Bridge, celui du Bridge, pas celui de Proton)'))
     for name, question, what in asked:
         current = secret(name)[0]
-        user = input(f'{question}{f" [{current}]" if current else ""} (empty to skip): ').strip()
+        user = input(f'{question}{f" [{current}]" if current else ""} (vide pour passer) : ').strip()
         if not user:
             continue
-        print(f'Now {what}, asked twice by the keychain:')
+        print(f'Maintenant {what}, demandé deux fois par le trousseau :')
         subprocess.run(['security', 'delete-generic-password', '-s', _service(name)],
                        capture_output=True)
         # -w last and without a value: `security` asks for the password itself
         done = subprocess.run(['security', 'add-generic-password', '-s', _service(name),
                                '-a', user, '-l', f'patchnames ({name})', '-w'])
-        print('  kept in the keychain.' if done.returncode == 0 else '  NOT kept (see above).')
+        print('  gardé dans le trousseau.' if done.returncode == 0
+              else '  PAS gardé (voir ci-dessus).')
 
 
 # ---------------------------------------------------------------------------
@@ -517,8 +589,8 @@ def request_export():
     if form:
         url, html = send(url, form, dict(form['fields'], username=user, password=password))
         if signin(html):
-            raise RuntimeError('eBird refused the login (user name or password; '
-                               '`patchdoc ebird --login` to set them again)')
+            raise RuntimeError("eBird a refusé la connexion (nom d'utilisateur ou mot de passe ; "
+                               '`patchdoc ebird --login` pour les redonner)')
     if 'downloadmydata' not in url.lower():
         url, html = get(DOWNLOAD_PAGE)
     # the request of the observations, not of the taxonomy next to it
@@ -534,7 +606,7 @@ def request_export():
         if re.search('my observations', text, re.I):
             get(urllib.parse.urljoin(url, href))
             return True
-    raise RuntimeError('the request of the observations was not found on the eBird page')
+    raise RuntimeError('la demande des observations est introuvable sur la page eBird')
 
 
 def _mail_texts(since):
@@ -597,7 +669,7 @@ def download(link):
     """download the zip of an export and make it the working copy"""
     import urllib.request
     if not LINK.fullmatch(link):
-        raise ValueError(f'not the link of an eBird export: {link}')
+        raise ValueError(f"ce n'est pas le lien d'un export eBird : {link}")
     os.makedirs(data_dir(), exist_ok=True)
     path = os.path.join(data_dir(), link.rsplit('/', 1)[-1])
     request = urllib.request.Request(link, headers={'User-Agent': AGENT})
@@ -606,7 +678,7 @@ def download(link):
             handle.write(chunk)
     made = _made(path)
     if made is None:
-        raise RuntimeError(f'{path} is not an eBird export')
+        raise RuntimeError(f"{path} n'est pas un export eBird")
     _import(path, made)
     os.remove(path)
     return working_copy()
@@ -620,18 +692,20 @@ def refresh(wait=900, quiet=False):
     try:
         sent = request_export()
     except Exception as exc:
-        say(f'eBird: {exc}')
+        say(f'eBird : {exc}')
         sent = False
     if sent:
-        say('eBird: a new export is requested; its link comes by email in a few minutes.')
+        say('eBird : un nouvel export est demandé ; son lien arrive par courriel dans quelques '
+            'minutes.')
     else:
-        say(f'eBird: click "Request My Observations" on {DOWNLOAD_PAGE} (opened in the browser).')
+        say(f'eBird : cliquez sur « Request My Observations » sur {DOWNLOAD_PAGE} (ouverte dans '
+            'le navigateur).')
         if sys.platform == 'darwin':
             subprocess.run(['open', BUTTON], capture_output=True)
     mailbox = secret('imap')[0]
     if not mailbox:
-        say('eBird: no mailbox in the keychain (`patchdoc ebird --login`): open the link of the '
-            'email yourself; the zip is picked up when it lands in ~/Downloads.')
+        say('eBird : pas de boîte courriel dans le trousseau (`patchdoc ebird --login`) : ouvrez '
+            "vous-même le lien du courriel ; le zip est pris dès qu'il arrive dans ~/Downloads.")
     before = _made(working_copy()) if os.path.isfile(working_copy()) else 0
     try:
         while time.time() - since < wait:
@@ -640,21 +714,21 @@ def refresh(wait=900, quiet=False):
                 try:
                     link = find_link(since)
                 except Exception as exc:
-                    say(f'eBird: the mailbox could not be read ({exc}).')
+                    say(f'eBird : la boîte courriel est illisible ({exc}).')
                     mailbox, link = None, None
                 if link:
-                    say('eBird: the link arrived; downloading.')
+                    say('eBird : le lien est arrivé ; téléchargement.')
                     return download(link)
             path = find_export(quiet=True)
             if path and (_made(path) or 0) > max(before or 0, since - 3600):
                 return path
             if not quiet:
-                print(f'  waiting for the export, {int(time.time() - since)} s '
-                      '(Ctrl-C to go on with the data on disk)', end='\r', flush=True)
+                print(f"  attente de l'export, {int(time.time() - since)} s "
+                      '(Ctrl-C pour continuer avec les données sur disque)', end='\r', flush=True)
     except KeyboardInterrupt:
-        say('\neBird: not waiting any longer; the data on disk is used.')
+        say("\neBird : fin de l'attente ; les données sur disque sont utilisées.")
         return None
-    say(f'\neBird: no new export after {wait} s; the data on disk is used.')
+    say(f'\neBird : pas de nouvel export après {wait} s ; les données sur disque sont utilisées.')
     return None
 
 
@@ -662,12 +736,12 @@ def status():
     """say what eBird data is on disk and which accounts are known"""
     data = load(quiet=False)
     if data is None:
-        print(f'No eBird export found ({", ".join(_cfg()["ebird_search"])}).')
+        print(f'Aucun export eBird trouvé ({", ".join(_cfg()["ebird_search"])}).')
     else:
         days = sorted(data.by_day)
-        print(f'eBird data: {data.path}')
-        print(f'  made by eBird on {data.asof:%Y-%m-%d %H:%M}; {len(data.lists)} checklists, '
-              f'{days[0]} to {days[-1]}')
-    for name, what in (('ebird', 'eBird account'), ('imap', 'Mailbox (IMAP)')):
+        print(f'Données eBird : {data.path}')
+        print(f'  faites par eBird le {data.asof:%Y-%m-%d %H:%M} ; {len(data.lists)} listes, '
+              f'du {days[0]} au {days[-1]}')
+    for name, what in (('ebird', 'Compte eBird'), ('imap', 'Boîte courriel (IMAP)')):
         user = secret(name)[0]
-        print(f'{what}: {user or "not set (patchdoc ebird --login)"}')
+        print(f'{what} : {user or "non défini (patchdoc ebird --login)"}')

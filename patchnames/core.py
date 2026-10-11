@@ -247,7 +247,7 @@ def patchnames(extensions=None, skip=()):
     if extensions is None:
         extensions = cfg['extensions']
 
-    photo_archive_root = os.path.expanduser(cfg['photo_archive_root'])
+    photo_archive_root = _config_module.archive_root(cfg)
     bird_lenses = cfg['bird_lenses']
 
     nef_to_dng()

@@ -6,8 +6,18 @@ so that searching and browsing need neither the archive drive nor the raws.
 
 A photo is known by its canonical name (YYMMDD_HHMMSS[_WHO]_NUM.ext), which
 stays the same wherever the file moves; its path is only where it was last
-seen. The photos of a sequence share what Claude said of it; the search works
-on sequences, through the frame Claude looked at (rep = 1).
+seen. The path of an archived photo is kept relative to the archive, which
+may be an external drive or a network mount, at one place today and another
+tomorrow: resolve() looks for it under config 'photo_archive_root' and each
+of 'photo_archive_mounts'. The photos of a sequence share what Claude said
+of it; the search works on sequences, through the frame Claude looked at
+(rep = 1).
+
+SQLite rather than DuckDB: the search page reads the index while patchdoc
+writes to it, which one DuckDB file does not allow between two processes,
+and its full-text index follows every insert. The columns are typed, so
+DuckDB reads the file as it is for an analysis of one's own:
+ATTACH 'photos.sqlite' AS idx (TYPE sqlite, READ_ONLY).
 
 The files stay the truth: what `patchdoc` writes here is also written into
 the photos (title, description, keywords, place, eBird checklist), and
@@ -23,11 +33,12 @@ import unicodedata
 
 from . import config as _config_module
 
-#: the columns of a photo (lists are joined with '; ')
+#: the columns of a photo (lists are joined with '; '); text unless in TYPES
 COLUMNS = ('name', 'path', 'stem', 'ext',
            'taken',            # the clock of the camera, ISO
            'local',            # the time at the place: taken + clock_offset
            'clock_offset',     # hours
+           'zone',             # the time zone the camera says it is set to, hours from UTC
            'camera', 'lens', 'focal',
            'bird',             # 1 when taken beyond config 'bird_focal_min'
            'seq', 'seq_n', 'rep',
@@ -41,21 +52,34 @@ COLUMNS = ('name', 'path', 'stem', 'ext',
            'described',        # when Claude described it, ISO; NULL if it never did
            'place_norm')
 
+TYPES = {'clock_offset': 'REAL', 'zone': 'REAL', 'focal': 'REAL', 'lat': 'REAL', 'lon': 'REAL',
+         'bird': 'INTEGER', 'seq_n': 'INTEGER', 'rep': 'INTEGER', 'on_checklist': 'INTEGER'}
+
+PHOTOS = ('(id INTEGER PRIMARY KEY, '
+          + ', '.join(f'{column} {TYPES.get(column, "TEXT")}' for column in COLUMNS)
+          + ', UNIQUE (name))')
+TABLES = {
+    'tags': '(name TEXT, kind TEXT, value TEXT, norm TEXT)',
+    'checklists': '(sid TEXT PRIMARY KEY, day TEXT, start TEXT, duration INTEGER, protocol TEXT, '
+                  'location TEXT, county TEXT, state TEXT, country TEXT, lat REAL, lon REAL, '
+                  'comments TEXT)',
+    'observations': '(sid TEXT, francais TEXT, latin TEXT, count TEXT, details TEXT, norm TEXT)',
+    'meta': '(key TEXT PRIMARY KEY, value TEXT)',
+}
 SCHEMA = f"""
-CREATE TABLE IF NOT EXISTS photos (id INTEGER PRIMARY KEY, {', '.join(COLUMNS)}, UNIQUE (name));
+CREATE TABLE IF NOT EXISTS photos {PHOTOS};
 CREATE INDEX IF NOT EXISTS photos_seq ON photos (seq);
 CREATE INDEX IF NOT EXISTS photos_rep ON photos (rep, local);
 CREATE INDEX IF NOT EXISTS photos_checklist ON photos (checklist);
-CREATE TABLE IF NOT EXISTS tags (name, kind, value, norm);
+CREATE TABLE IF NOT EXISTS tags {TABLES['tags']};
 CREATE INDEX IF NOT EXISTS tags_name ON tags (name);
 CREATE INDEX IF NOT EXISTS tags_kind ON tags (kind, value);
 CREATE VIRTUAL TABLE IF NOT EXISTS search USING fts5(
     text, tokenize = 'unicode61 remove_diacritics 2');
-CREATE TABLE IF NOT EXISTS checklists (sid PRIMARY KEY, day, start, duration, protocol,
-    location, county, state, country, lat, lon, comments);
-CREATE TABLE IF NOT EXISTS observations (sid, francais, latin, count, details, norm);
+CREATE TABLE IF NOT EXISTS checklists {TABLES['checklists']};
+CREATE TABLE IF NOT EXISTS observations {TABLES['observations']};
 CREATE INDEX IF NOT EXISTS observations_sid ON observations (sid);
-CREATE TABLE IF NOT EXISTS meta (key PRIMARY KEY, value);
+CREATE TABLE IF NOT EXISTS meta {TABLES['meta']};
 """
 
 #: the kinds of tags, and the column of a photo each comes from
@@ -74,12 +98,110 @@ def index_dir():
     return os.path.expanduser(_config_module.load()['index_dir'])
 
 
+def db_path():
+    return os.path.join(index_dir(), 'photos.sqlite')
+
+
 def connect():
     os.makedirs(index_dir(), exist_ok=True)
-    db = sqlite3.connect(os.path.join(index_dir(), 'photos.sqlite'), timeout=30)
+    db = sqlite3.connect(db_path(), timeout=60)
     db.row_factory = sqlite3.Row
+    _retype(db)
     db.executescript(SCHEMA)
+    # a column added since the index was made
+    made = {row['name'] for row in db.execute('PRAGMA table_info(photos)')}
+    for column in COLUMNS:
+        if column not in made:
+            db.execute(f'ALTER TABLE photos ADD COLUMN {column} {TYPES.get(column, "TEXT")}')
+    _relative(db)
     return db
+
+
+def _retype(db):
+    """give their types to the columns of an index made before they had any
+    (DuckDB and pandas read an untyped column as bytes)"""
+    made = {row['name']: row['type'] for row in db.execute('PRAGMA table_info(photos)')}
+    if not made or all(made.values()):
+        return
+    tables = dict(TABLES, photos=PHOTOS)
+    with db:
+        for table, columns in tables.items():
+            if not db.execute('SELECT 1 FROM sqlite_master WHERE name = ?', (table,)).fetchone():
+                continue
+            names = ', '.join(row['name'] for row in db.execute(f'PRAGMA table_info({table})'))
+            db.execute(f'ALTER TABLE {table} RENAME TO {table}_untyped')
+            db.execute(f'CREATE TABLE {table} {columns}')
+            db.execute(f'INSERT INTO {table} ({names}) SELECT {names} FROM {table}_untyped')
+            db.execute(f'DROP TABLE {table}_untyped')
+    db.executescript(SCHEMA)        # the search indexes went with the old tables
+    db.execute('VACUUM')            # and the room they took is given back
+
+
+def _relative(db):
+    """make relative the paths of archived photos kept in full by an older
+    index (see roots())"""
+    for root in roots():
+        head = root + os.sep
+        if db.execute('SELECT 1 FROM photos WHERE substr(path, 1, ?) = ? LIMIT 1',
+                      (len(head), head)).fetchone():
+            with db:
+                db.execute('UPDATE photos SET path = substr(path, ?) WHERE substr(path, 1, ?) = ?',
+                           (len(head) + 1, len(head), head))
+
+
+def meta(key):
+    """a value the index keeps under a name, None without one (or without an
+    index: nothing is made to look)"""
+    if not os.path.isfile(db_path()):
+        return None
+    db = sqlite3.connect(f'file:{db_path()}?mode=ro', uri=True, timeout=60)
+    try:
+        row = db.execute('SELECT value FROM meta WHERE key = ?', (key,)).fetchone()
+    except sqlite3.OperationalError:
+        row = None
+    db.close()
+    return row[0] if row else None
+
+
+def set_meta(db, key, value):
+    db.execute('INSERT OR REPLACE INTO meta VALUES (?, ?)', (key, str(value)))
+    db.commit()
+
+
+# ---------------------------------------------------------------------------
+# Where the photos are: an archive that is not always at the same place
+# ---------------------------------------------------------------------------
+
+def roots():
+    """the places the archive may be mounted at, the usual one first"""
+    return _config_module.archive_roots()
+
+
+def shorten(path):
+    """the path of a photo as the index keeps it: relative to the archive
+    when the photo is in it, unchanged otherwise"""
+    for root in roots():
+        if path and path.startswith(root + os.sep):
+            return path[len(root) + 1:]
+    return path
+
+
+def resolve(path):
+    """where a photo of the index can be read now: under the first archive
+    root that has it; None when it cannot be reached (drive not mounted)"""
+    if not path:
+        return None
+    if os.path.isabs(path):
+        if os.path.exists(path):
+            return path
+        path = shorten(path)
+        if os.path.isabs(path):
+            return None
+    for root in roots():
+        full = os.path.join(root, path)
+        if os.path.exists(full):
+            return full
+    return None
 
 
 def _image_path(kind, name):
@@ -118,11 +240,10 @@ def put(db, records):
         touched.update(row[0] for row in db.execute(
             f'SELECT DISTINCT seq FROM photos WHERE name IN ({", ".join("?" * len(part))})', part))
     for record in records:
+        if record.get('path'):
+            record = dict(record, path=shorten(record['path']))
         if any(key in record for key in ('location', 'county', 'state', 'country')):
-            from .ebird import country_name
-            record = dict(record, place_norm=fold(' '.join(
-                str(record.get(key) or '') for key in ('location', 'county', 'state'))
-                + ' ' + country_name(record.get('country') or '')))
+            record = dict(record, place_norm=place_text(record))
         keys = [key for key in COLUMNS if key in record]
         changes = ', '.join(f'{key} = excluded.{key}' for key in keys if key != 'name')
         db.execute(f'INSERT INTO photos ({", ".join(keys)}) VALUES ({", ".join("?" * len(keys))}) '
@@ -131,6 +252,29 @@ def put(db, records):
                    [record[key] for key in keys])
     _derive(db, set(names) | _tidy(db, touched - {None}))
     db.commit()
+
+
+def forget(db, names):
+    """take photos out of the index (a file renamed takes its new name)"""
+    names = list(names)
+    seqs = set()
+    for name in names:
+        row = db.execute('SELECT id, seq FROM photos WHERE name = ?', (name,)).fetchone()
+        if row is None:
+            continue
+        seqs.add(row['seq'])
+        db.execute('DELETE FROM search WHERE rowid = ?', (row['id'],))
+        db.execute('DELETE FROM tags WHERE name = ?', (name,))
+        db.execute('DELETE FROM photos WHERE name = ?', (name,))
+    _derive(db, _tidy(db, seqs - {None}))
+    db.commit()
+
+
+def place_text(record):
+    """the place of a photo as it is searched: its names, folded"""
+    from .ebird import country_name
+    return fold(' '.join(str(record.get(key) or '') for key in ('location', 'county', 'state'))
+                + ' ' + country_name(record.get('country') or ''))
 
 
 def _tidy(db, seqs):

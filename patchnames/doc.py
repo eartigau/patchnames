@@ -28,11 +28,21 @@ A sequence Claude could not describe stays in the directory, to run
 --index-only describes and indexes without touching the files (to try it in
 a folder of the archive).
 
+Only the photos of the current directory are ever shown to Claude: one call
+per sequence, about a tenth of a dollar at API prices with the default
+model. A run says what it expects to spend before it starts and stops at
+config 'doc_budget' (--budget), the sequences left staying in the directory
+for the next run; --model and --effort pick a cheaper setting.
+
+What the program says is in French, like the descriptions.
+
 `patchdoc index` adds the photos already in the archive to the index, from
 their names alone (date, time, bird lens or not) and the eBird checklists:
 enough to search them by place and date, and by the species of their
 checklist. `patchdoc index --exif DIR` reads what the files of a folder say
-of themselves (slow on a network drive).
+of themselves (slow on a network drive). `patchdoc vignettes` makes ahead of
+time the thumbnails the search page shows, so that browsing does not wait
+for the drive, or need it. None of the three calls Claude.
 """
 
 import argparse
@@ -44,6 +54,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
@@ -102,7 +113,7 @@ Réponds par un objet JSON :
 - "certitude" : celle de l'identification, "sûre", "probable" ou "à confirmer" ("sûre" s'il n'y a rien à identifier) ;
 - "autres_mots_cles" : au plus cinq mots-clés utiles pour retrouver la photo ;
 - "liste" : l'identifiant (S...) de la liste eBird à laquelle la séquence appartient, null s'il n'y en a pas ;
-- "note_ebird" : une phrase si ce que tu vois ne s'accorde pas avec la liste eBird (espèce absente de la liste, autre espèce plus probable que celle notée), sinon ""."""
+- "note_ebird" : une phrase seulement si ce que tu vois ne s'accorde pas avec la liste eBird (espèce absente de la liste, autre espèce plus probable que celle notée) ; une chaîne vide "" quand la photo s'accorde avec la liste ou qu'il n'y a pas de liste."""
 
 VIEWS = ("La première est la vue du milieu de la séquence, réduite ; la deuxième est un "
          "agrandissement de cette vue à pleine résolution autour du point de mise au point de "
@@ -193,8 +204,9 @@ def _zone(row):
 
 def sequences(files, rows, gap, is_bird):
     """the sequences of photos, camera by camera, the bird photos apart from
-    the others: [{'names', 'camera', 'bird', 'when'}] in the order of time;
-    'when' is the camera time of the middle frame"""
+    the others: [{'names', 'camera', 'bird', 'when', 'zone'}] in the order of
+    time; 'when' is the camera time of the middle frame, 'zone' the time zone
+    the camera says it is set to"""
     sets = {}
     for name in files:
         row = rows.get(name, {})
@@ -202,8 +214,9 @@ def sequences(files, rows, gap, is_bird):
     out = []
     for (camera, bird), names in sets.items():
         for group in _groups(names, rows, gap):
+            middle = rows.get(group[len(group) // 2], {})
             out.append({'names': group, 'camera': camera, 'bird': bird,
-                        'when': _when(rows.get(group[len(group) // 2], {}))})
+                        'when': _when(middle), 'zone': _zone(middle)})
     out.sort(key=lambda seq: (seq['when'] or datetime.max, seq['names'][0]))
     return out
 
@@ -220,9 +233,8 @@ def locate(seqs, data, rows=None, clock=None, before=None):
     moments, zoned = {}, set()
     for seq in seqs:
         if seq['bird'] and seq['when']:
-            zone = _zone(rows.get(seq['names'][len(seq['names']) // 2], {}))
-            moments.setdefault(seq['camera'], []).append((seq['when'], zone))
-            if zone is not None:
+            moments.setdefault(seq['camera'], []).append((seq['when'], seq.get('zone')))
+            if seq.get('zone') is not None:
                 zoned.add(seq['camera'])
     offsets = {}
     if data and clock is None:
@@ -296,6 +308,12 @@ def settle(seq, answer, data):
     if not answer:
         return sure, checklist
     species = answer.get('especes') or []
+    # a photo taken near a list, not during it, is not held against the list
+    on_list = _on_list([sp.get('latin', '') for sp in species],
+                       checklist if kind in ('inside', 'other') else None)
+    # a note is for a photo that does not fit its list: none when every
+    #   species named is on it (a small model writes one anyway)
+    note = '' if on_list == 1 else (answer.get('note_ebird') or '').strip()
     sure.update({
         'title': answer['titre'], 'topic': answer.get('sujet') or '',
         'description': answer['description'],
@@ -304,8 +322,8 @@ def settle(seq, answer, data):
         'habitat': photoindex.SEP.join(answer.get('habitat') or []),
         'keywords': photoindex.SEP.join(answer.get('autres_mots_cles') or []),
         'certainty': answer.get('certitude') or '',
-        'note': (answer.get('note_ebird') or '').strip(),
-        'on_checklist': _on_list([sp.get('latin', '') for sp in species], checklist),
+        'note': note,
+        'on_checklist': on_list,
         'described': datetime.now().isoformat(' ', 'seconds'),
     })
     return sure, checklist
@@ -369,13 +387,15 @@ def said_of(seq, rows, data):
     and what its middle frame says of itself"""
     said = from_file(rows.get(seq['names'][len(seq['names']) // 2], {}))
     kept, checklist = settle(seq, None, data)
+    during = kept['match'] == 'inside'
     kept.update(said)
     if said.get('checklist') and data and said['checklist'] in data.lists:
         # the checklist written in the file, rather than the one of its hours
-        checklist = data.lists[said['checklist']]
+        checklist, during = data.lists[said['checklist']], True
         kept.update(_place(checklist))
     if said:
-        kept['on_checklist'] = _on_list(kept['latin'].split(photoindex.SEP), checklist)
+        kept['on_checklist'] = _on_list(kept['latin'].split(photoindex.SEP),
+                                        checklist if during else None)
     return kept
 
 
@@ -396,7 +416,7 @@ def frame_records(seq, kept, rows, paths):
                       local=(when + timedelta(hours=kept['clock_offset'])).isoformat(' ')
                       if when else None,
                       camera=str(row.get('Model') or ''), lens=_lens(row),
-                      focal=_focal(row) or None, seq=first, seq_n=len(names),
+                      focal=_focal(row) or None, zone=_zone(row), seq=first, seq_n=len(names),
                       rep=int(k == len(names) // 2))
         records.append(record)
     return records
@@ -472,14 +492,16 @@ def prompt_for(seq, images, rows, instructions):
         instructions=instructions, topics=', '.join(f'"{topic}"' for topic in TOPICS))
 
 
-def ask_claude(prompt, tmpdir, model=None, tries=2):
-    """Claude's answer to a prompt, as (dict, cost in dollars)"""
+def ask_claude(prompt, tmpdir, model=None, effort=None, tries=2):
+    """Claude's answer to a prompt, as (dict, cost in dollars at API prices)"""
     cmd = ['claude', '-p', prompt, '--system-prompt', SYSTEM, '--tools', 'Read',
            '--allowedTools', 'Read', '--add-dir', tmpdir, '--output-format', 'json',
            '--json-schema', json.dumps(SCHEMA), '--no-session-persistence',
            '--strict-mcp-config', '--disable-slash-commands']
     if model:
         cmd += ['--model', model]
+    if effort:
+        cmd += ['--effort', effort]
     error = None
     for attempt in range(tries):
         if attempt:
@@ -487,18 +509,18 @@ def ask_claude(prompt, tmpdir, model=None, tries=2):
         try:
             res = subprocess.run(cmd, capture_output=True, text=True, timeout=900, cwd=tmpdir)
             if res.returncode != 0:
-                raise RuntimeError(f'claude failed: {(res.stderr or res.stdout).strip()[:300]}')
+                raise RuntimeError(f'claude a échoué : {(res.stderr or res.stdout).strip()[:300]}')
             out = json.loads(res.stdout)
             answer = out.get('structured_output')
             if not isinstance(answer, dict):
                 text = out.get('result') or ''
                 start, end = text.find('{'), text.rfind('}')
                 if start < 0 or end < start:
-                    raise RuntimeError(f'no JSON in the answer: {text[:300]}')
+                    raise RuntimeError(f'pas de JSON dans la réponse : {text[:300]}')
                 answer = json.loads(text[start:end + 1])
             for key in ('titre', 'description'):
                 if not answer.get(key):
-                    raise RuntimeError(f'the answer has no {key}: {answer}')
+                    raise RuntimeError(f"la réponse n'a pas de {key} : {answer}")
             return answer, float(out.get('total_cost_usd') or 0.0)
         except (RuntimeError, ValueError, subprocess.TimeoutExpired) as exc:
             error = exc
@@ -509,51 +531,82 @@ def ask_claude(prompt, tmpdir, model=None, tries=2):
 # patchdoc
 # ---------------------------------------------------------------------------
 
+#: what a sequence costs when no run has measured it yet, dollars at API prices
+COST_GUESS = 0.10
+
+
+class _OverBudget(Exception):
+    """a sequence left for another run: the budget of this one is spent"""
+
+
 def _photos():
     return sorted({f for pattern in IMAGE_PATTERNS
                    for f in glob.glob(pattern) + glob.glob(pattern.upper()) if os.path.isfile(f)})
 
 
-def _ebird_data(newest, refresh, quiet_dry):
+def _ebird_data(newest, refresh, dry_run):
     """the eBird data, asked anew when the photos are newer than it (refresh:
     True to ask in any case, False never, None as the config says)"""
     data = _ebird.load(quiet=False)
     stale = data is None or (newest is not None and data.asof < newest)
     if refresh is None:
         refresh = stale and _cfg()['ebird_refresh']
-    if refresh and quiet_dry:
-        print('eBird: the data on disk is older than the photos (not refreshed in a dry run).')
+    if refresh and dry_run:
+        print('eBird : les données sur disque sont plus anciennes que les photos '
+              '(pas de mise à jour pendant un essai).')
     elif refresh:
         if stale and data is not None:
-            print(f'eBird: the data on disk ({data.asof:%Y-%m-%d %H:%M}) is older than the photos.')
+            print(f'eBird : les données sur disque ({data.asof:%Y-%m-%d %H:%M}) sont plus '
+                  'anciennes que les photos.')
         if _ebird.refresh():
             data = _ebird.load(quiet=False)
     if data is None:
-        print('No eBird data: the photos are described without it (see `patchdoc ebird`).')
+        print('Pas de données eBird : les photos sont décrites sans elles (voir `patchdoc ebird`).')
     else:
-        print(f'eBird data of {data.asof:%Y-%m-%d %H:%M}, {len(data.lists)} checklists.')
+        print(f'Données eBird du {data.asof:%Y-%m-%d %H:%M}, {len(data.lists)} listes.')
     return data
 
 
 def _say(seq):
     """one line on where and when a sequence is"""
     match = seq.get('match')
-    clock = f' (clock {seq["offset"]:+g} h)' if seq.get('offset') else ''
+    clock = f' (horloge {seq["offset"]:+g} h)' if seq.get('offset') else ''
     if match and match.checklist:
-        return f'{match.kind} eBird {match.checklist.sid}, {match.checklist.label()}{clock}'
+        how = 'pendant' if match.kind == 'inside' else "à moins d'une heure de"
+        return f'{how} la liste eBird {match.checklist.sid}, {match.checklist.label()}{clock}'
     if seq.get('gps'):
-        return f'{seq["gps"][1]:.1f} km from {seq["gps"][0].location}'
-    return 'no eBird checklist'
+        return f'à {seq["gps"][1]:.1f} km de {seq["gps"][0].location}'
+    return 'aucune liste eBird'
+
+
+def _cost_key(model, effort):
+    return f'cost_per_sequence:{model or "default"}:{effort or "default"}'
+
+
+def _cost_guess(model, effort):
+    """what a sequence costs in dollars at API prices, and whether a run
+    with this model and effort measured it"""
+    try:
+        return float(photoindex.meta(_cost_key(model, effort))), True
+    except (TypeError, ValueError):
+        return COST_GUESS, False
+
+
+def _count(number, word):
+    """'1 photo', '6 photos'"""
+    return f'{number} {word}{"s" if number > 1 else ""}'
 
 
 def document(gap=None, force=False, dry_run=False, index_only=False, backup=True,
-             instructions=None, model=None, jobs=None, min_focal=None, refresh=None,
-             clock=None):
+             instructions=None, model=None, effort=None, jobs=None, min_focal=None,
+             refresh=None, clock=None, budget=None):
     """Describe, rename, archive and index the photos of the current directory
     (see the module)."""
     cfg = _cfg()
     gap = cfg['keywords_gap'] if gap is None else gap
     model = model or cfg.get('keywords_model')
+    effort = effort or cfg.get('doc_effort')
+    budget = float(cfg.get('doc_budget') or 0) if budget is None else budget
     jobs = int(jobs or cfg['doc_jobs'])
     min_focal = cfg['bird_focal_min'] if min_focal is None else min_focal
     path = instructions or instructions_path()
@@ -564,7 +617,7 @@ def document(gap=None, force=False, dry_run=False, index_only=False, backup=True
 
     files = _photos()
     if not files and (dry_run or index_only):
-        print('No photo in this directory.')
+        print('Aucune photo dans ce dossier.')
         return
     rows = {os.path.basename(src): row for src, row in read_exif(files).items()}
     todo = [f for f in files if force or not rows.get(f, {}).get('Title')]
@@ -573,22 +626,31 @@ def document(gap=None, force=False, dry_run=False, index_only=False, backup=True
     done = sequences([f for f in files if f not in todo], rows, gap,
                      lambda row: _focal(row) > min_focal)
     if done:
-        print(f'{sum(len(s["names"]) for s in done)} photos already described '
-              '(--force to describe them again).')
+        print(f'{sum(len(s["names"]) for s in done)} photos déjà décrites '
+              '(--force pour les décrire de nouveau).')
     times = [seq['when'] for seq in seqs + done if seq['when']]
     data = _ebird_data(max(times) if times else None, refresh, dry_run) if files else None
     locate(seqs + done, data, rows, clock)
     shifted = sorted({seq['offset'] for seq in seqs + done if seq['offset']})
     if shifted:
-        print('Camera clock taken as off by ' + ', '.join(f'{offset:+g} h' for offset in shifted)
+        print("Horloge de l'appareil considérée comme décalée de "
+              + ', '.join(f'{offset:+g} h' for offset in shifted)
               + (' (--clock).' if clock is not None else
-                 ', from the eBird checklists (--clock HOURS to set it yourself, 0 for none).'))
+                 ", d'après les listes eBird (--clock HEURES pour la fixer vous-même, "
+                 '0 pour aucun décalage).'))
 
     birds = sum(1 for seq in seqs if seq['bird'])
-    print(f'{len(todo)} photos to describe in {len(seqs)} sequences '
-          f'({birds} beyond {min_focal:g} mm), {jobs} at a time.')
+    print(f'{_count(len(todo), "photo")} à décrire en {_count(len(seqs), "séquence")} '
+          f'({birds} au-delà de {min_focal:g} mm), {jobs} à la fois.')
+    if seqs:
+        each, measured = _cost_guess(model, effort)
+        print(f"Claude : environ {len(seqs) * each:.2f} $ US au prix de l'API ({each:.3f} $ par "
+              + ('séquence au dernier passage)' if measured else 'séquence, estimation de départ)')
+              + (f' ; arrêt à {budget:g} $ (--budget).' if budget and len(seqs) * each > budget
+                 else '.'))
 
-    failed, answers, cost = [], {}, 0.0
+    failed, waiting, answers = [], [], {}
+    spent, lock = {'total': 0.0}, threading.Lock()
     with tempfile.TemporaryDirectory() as tmpdir:
         staged = {}     # name as found -> {'thumb': path, 'preview': path}
 
@@ -614,18 +676,23 @@ def document(gap=None, force=False, dry_run=False, index_only=False, backup=True
                         pass
 
         def describe(index, seq):
+            if budget and spent['total'] >= budget:
+                raise _OverBudget()
             images = _pictures(seq['names'], tmpdir, index, rows, keep)
-            answer, spent = ask_claude(prompt_for(seq, images, rows, explanations), tmpdir, model)
+            answer, cost = ask_claude(prompt_for(seq, images, rows, explanations), tmpdir,
+                                      model, effort)
+            with lock:
+                spent['total'] += cost
             kept, checklist = settle(seq, answer, data)
             if not (dry_run or index_only):
                 cmd = ['exiftool', '-q'] + ([] if backup else ['-overwrite_original'])
                 res = subprocess.run(cmd + file_tags(answer, kept, checklist) + seq['names'],
                                      capture_output=True, text=True)
                 if res.returncode != 0:
-                    raise RuntimeError(f'exiftool: {res.stderr.strip()[:300]}')
+                    raise RuntimeError(f'exiftool : {res.stderr.strip()[:300]}')
             if not dry_run:
                 thumbs(seq['names'])
-            return answer, kept, spent
+            return answer, kept
 
         with ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
             futures = {pool.submit(describe, index, seq): index for index, seq in enumerate(seqs)}
@@ -633,27 +700,33 @@ def document(gap=None, force=False, dry_run=False, index_only=False, backup=True
                 index = futures[future]
                 seq = seqs[index]
                 names = seq['names']
-                head = (f'\n[{count}/{len(seqs)}] {names[0]} .. {names[-1]}  ({len(names)} photos)'
-                        f'\n    {_say(seq)}')
+                head = (f'\n[{count}/{len(seqs)}] {names[0]} .. {names[-1]}  '
+                        f'({_count(len(names), "photo")})\n    {_say(seq)}')
                 try:
-                    answer, kept, spent = future.result()
+                    answer, kept = future.result()
+                except _OverBudget:
+                    waiting.append(index)
+                    continue
                 except Exception as exc:
-                    print(f'{head}\n    ERROR: {exc}')
+                    print(f'{head}\n    ERREUR : {exc}')
                     failed.append(index)
                     continue
                 answers[index] = kept
-                cost += spent
                 flags = [answer.get('certitude', '?')]
                 if kept['on_checklist'] == 0:
-                    flags.append('not on the checklist')
+                    flags.append('absente de la liste')
                 elif kept['on_checklist']:
-                    flags.append('on the checklist')
+                    flags.append('sur la liste')
                 print(f'{head}\n    {answer["titre"]}  [{", ".join(flags)}]'
                       f'\n    {answer["description"]}'
-                      + (f'\n    eBird: {kept["note"]}' if kept['note'] else ''))
+                      + (f'\n    eBird : {kept["note"]}' if kept['note'] else ''))
 
+        cost = spent['total']
+        if waiting:
+            print(f'\nBudget de {budget:g} $ atteint : {_count(len(waiting), "séquence")} à décrire '
+                  'au prochain passage (relancez patchdoc, ou --budget pour un autre plafond).')
         if dry_run:
-            print(f'\nDry run: nothing written. Claude: ${cost:.2f} at API prices.')
+            print(f"\nEssai : rien n'a été écrit. Claude : {cost:.2f} $ US au prix de l'API.")
             return
 
         # the photos already described, from what they say of themselves
@@ -668,8 +741,8 @@ def document(gap=None, force=False, dry_run=False, index_only=False, backup=True
                 except Exception:
                     pass
 
-        # rename and archive, the sequences that failed left where they are
-        left = [name for index in failed for name in seqs[index]['names']]
+        # rename and archive; the sequences not described are left where they are
+        left = [name for index in failed + waiting for name in seqs[index]['names']]
         paths = {}
         if not index_only:
             from .core import patchnames
@@ -681,7 +754,13 @@ def document(gap=None, force=False, dry_run=False, index_only=False, backup=True
         records = []
         for index, kept in answers.items():
             records += frame_records(seqs[index], kept, rows, paths)
+        # a file whose name changed (one named after its content, described
+        #   again) leaves the index under its old name
+        photoindex.forget(db, [name for name, path in paths.items()
+                               if os.path.basename(path) != name])
         photoindex.put(db, records)
+        if described:
+            photoindex.set_meta(db, _cost_key(model, effort), round(cost / len(described), 4))
         db.close()
         for index in answers:
             for name in seqs[index]['names']:
@@ -692,30 +771,34 @@ def document(gap=None, force=False, dry_run=False, index_only=False, backup=True
                         os.makedirs(os.path.dirname(target), exist_ok=True)
                         shutil.move(staged[name][kind], target)
 
-    print(f'\n{len(described)} sequences described, {len(records)} photos in the index '
-          f'({photoindex.index_dir()}). Claude: ${cost:.2f} at API prices.')
+    print(f"\n{_count(len(described), 'séquence')} décrite{'s' if len(described) > 1 else ''}, "
+          f"{_count(len(records), 'photo')} dans l'index ({photoindex.index_dir()}). "
+          f"Claude : {cost:.2f} $ US au prix de l'API.")
     offlist = sum(1 for kept in described if kept['on_checklist'] == 0)
     unsure = sum(1 for kept in described if kept['species'] and kept['certainty'] != 'sûre')
     nolist = sum(1 for kept in described if kept['bird'] and not kept['checklist'])
     if offlist:
-        print(f'  {offlist} with a species that is not on the eBird checklist.')
+        print(f'  {offlist} avec une espèce absente de la liste eBird.')
     if unsure:
-        print(f'  {unsure} with an identification to confirm.')
+        print(f'  {unsure} avec une identification à confirmer.')
     if nolist:
-        print(f'  {nolist} bird sequences without an eBird checklist.')
+        print(f"  {nolist} séquences d'oiseaux sans liste eBird.")
     if left:
-        print(f'  {len(left)} photos not described are left here: run patchdoc again.')
-    print('`patchdoc gui` to search them.')
+        print(f'  {len(left)} photos non décrites sont laissées ici : relancez patchdoc.')
+    print('`patchdoc gui` pour les chercher.')
 
 
 # ---------------------------------------------------------------------------
-# patchdoc index: the photos already in the archive
+# The photos already in the archive: patchdoc index, patchdoc vignettes
 # ---------------------------------------------------------------------------
+
+def _extensions():
+    return tuple('.' + pattern.rsplit('.', 1)[1] for pattern in IMAGE_PATTERNS)
+
 
 def _archive_files(root):
     """the photos of the archive, {name: (path, bird)}: root/20YY_MM/oiseaux
     and /autres"""
-    extensions = tuple('.' + pattern.rsplit('.', 1)[1] for pattern in IMAGE_PATTERNS)
     found = {}
     for month in sorted(os.listdir(root)):
         if not re.fullmatch(r'\d{4}_\d{2}', month):
@@ -725,9 +808,9 @@ def _archive_files(root):
             if not os.path.isdir(folder):
                 continue
             for name in os.listdir(folder):
-                if name.lower().endswith(extensions) and not name.startswith('.'):
+                if name.lower().endswith(_extensions()) and not name.startswith('.'):
                     found[name] = (os.path.join(folder, name), kind == 'oiseaux')
-        print(f'  {month}: {len(found)} photos', end='\r', flush=True)
+        print(f'  {month} : {len(found)} photos', end='\r', flush=True)
     print()
     return found
 
@@ -738,17 +821,17 @@ def index_archive(root=None, gap=None):
     they were taken during. Photos the index already has only get their
     path brought up to date."""
     cfg = _cfg()
-    root = os.path.expanduser(root or cfg['photo_archive_root'])
+    root = os.path.expanduser(root) if root else _config_module.archive_root(cfg)
     gap = cfg['keywords_gap'] if gap is None else gap
     if not os.path.isdir(root):
-        print(f'{root} is not there (the archive drive?).')
+        print(f"{root} est introuvable (le disque d'archive est-il monté ?).")
         return
-    print(f'Listing {root} ...')
+    print(f'Lecture des dossiers de {root} ...')
     found = _archive_files(root)
     db = photoindex.connect()
     known = photoindex.known(db)
     moved = [{'name': name, 'path': path} for name, (path, _) in found.items()
-             if name in known and known[name][0] != path]
+             if name in known and known[name][0] != photoindex.shorten(path)]
     rows, new = {}, []
     for name, (path, bird) in found.items():
         parsed = NAME.match(name)
@@ -764,11 +847,11 @@ def index_archive(root=None, gap=None):
         rows[name] = {'DateTimeOriginal': when.strftime('%Y:%m:%d %H:%M:%S'), 'Model': who or '',
                       'bird': bird}
         new.append(name)
-    print(f'{len(found)} photos in the archive: {len(new)} new to the index, '
-          f'{len(moved)} that moved.')
+    print(f"{len(found)} photos dans l'archive : {len(new)} nouvelles pour l'index, "
+          f'{len(moved)} déplacées.')
     data = _ebird.load(quiet=False)
     if data is None:
-        print('No eBird data: the photos are indexed without a place (see `patchdoc ebird`).')
+        print('Pas de données eBird : les photos sont indexées sans lieu (voir `patchdoc ebird`).')
     else:
         photoindex.sync_ebird(db, data)
     seqs = sequences(new, rows, gap, lambda row: row.get('bird'))
@@ -779,11 +862,12 @@ def index_archive(root=None, gap=None):
         records += frame_records(seq, settle(seq, None, data)[0], rows, paths)
     for record in records:
         # the names say nothing of the camera
-        record.pop('camera', None), record.pop('lens', None), record.pop('focal', None)
+        for key in ('camera', 'lens', 'focal', 'zone'):
+            record.pop(key, None)
     photoindex.put(db, records)
     db.close()
     placed = sum(1 for seq in seqs if seq['match'] and seq['match'].checklist)
-    print(f'{len(seqs)} sequences added, {placed} of them during an eBird checklist.')
+    print(f'{len(seqs)} séquences ajoutées, dont {placed} pendant une liste eBird.')
 
 
 def index_exif(folders, gap=None, force=False, chunk=200):
@@ -794,7 +878,6 @@ def index_exif(folders, gap=None, force=False, chunk=200):
     is not lost, and those already read are skipped unless force."""
     cfg = _cfg()
     gap = cfg['keywords_gap'] if gap is None else gap
-    extensions = tuple('.' + pattern.rsplit('.', 1)[1] for pattern in IMAGE_PATTERNS)
     data = _ebird.load(quiet=False)
     db = photoindex.connect()
     if data:
@@ -808,7 +891,7 @@ def index_exif(folders, gap=None, force=False, chunk=200):
     for folder in folders:
         folder = os.path.abspath(os.path.expanduser(folder))
         files = sorted(os.path.join(base, name) for base, _, names in os.walk(folder)
-                       for name in names if name.lower().endswith(extensions)
+                       for name in names if name.lower().endswith(_extensions())
                        and not name.startswith('.'))
         files = [path for path in files if force or os.path.basename(path) not in read]
         # a day of a folder at a time: the date at the start of a canonical name
@@ -817,7 +900,7 @@ def index_exif(folders, gap=None, force=False, chunk=200):
             parsed = NAME.match(os.path.basename(path))
             days.setdefault((os.path.dirname(path), parsed.group(1) if parsed else ''),
                             []).append(path)
-        print(f'{folder}: {len(files)} photos to read.')
+        print(f'{folder} : {len(files)} photos à lire.')
         count = 0
         for (base, day), part in days.items():
             rows = {}
@@ -838,9 +921,189 @@ def index_exif(folders, gap=None, force=False, chunk=200):
                 records += frame_records(seq, said_of(seq, rows, data), rows, paths)
             photoindex.put(db, records)
             told = sum(1 for record in records if record.get('title') and record['rep'])
-            print(f'  {os.path.relpath(base, folder)} {day}: {len(part)} photos, '
-                  f'{len(seqs)} sequences, {told} described.')
+            print(f'  {os.path.relpath(base, folder)} {day} : {len(part)} photos, '
+                  f'{len(seqs)} séquences, {told} décrites.')
     db.close()
+
+
+def rematch():
+    """Match every sequence of the index with the eBird checklists again, from
+    the index alone: after a new export (a list entered after its photos were
+    indexed) or a change in the matching. What Claude said is kept, and so is
+    a list Claude chose itself or a place taken from a GPS position."""
+    data = _ebird.load(quiet=False)
+    if data is None:
+        print('Pas de données eBird (voir `patchdoc ebird`).')
+        return
+    db = photoindex.connect()
+    photoindex.sync_ebird(db, data)
+    rows = db.execute('SELECT name, seq, taken, bird, camera, zone, latin, match, checklist, '
+                      'clock_offset FROM photos WHERE rep = 1 AND taken IS NOT NULL').fetchall()
+    seqs = []
+    for row in rows:
+        parsed = NAME.match(row['name'])
+        seqs.append({'names': [row['name']], 'bird': bool(row['bird']), 'zone': row['zone'],
+                     'camera': row['camera'] or (parsed.group(3) if parsed else '') or '',
+                     'when': datetime.fromisoformat(row['taken']), 'row': row})
+    locate(seqs, data)
+    changed = []
+    for seq in seqs:
+        row = seq['row']
+        kept, checklist = settle(seq, None, data)
+        if row['match'] == 'other' or (row['match'] == 'gps' and not checklist):
+            continue
+        if (kept['checklist'], kept['match'], kept['clock_offset']) == (
+                row['checklist'], row['match'], row['clock_offset'] or 0.0):
+            continue
+        on_list = _on_list((row['latin'] or '').split(photoindex.SEP),
+                           checklist if kept['match'] == 'inside' else None)
+        db.execute(
+            'UPDATE photos SET checklist = ?, match = ?, clock_offset = ?, on_checklist = ?, '
+            'location = ?, county = ?, state = ?, country = ?, lat = ?, lon = ?, place_norm = ?, '
+            "local = strftime('%Y-%m-%d %H:%M:%S', taken, ?) WHERE seq = ?",
+            (kept['checklist'], kept['match'], kept['clock_offset'], on_list, kept['location'],
+             kept['county'], kept['state'], kept['country'], kept['lat'], kept['lon'],
+             photoindex.place_text(kept), f"{kept['clock_offset']:+g} hours", row['seq']))
+        changed.append(row['name'])
+    photoindex._derive(db, changed)
+    db.commit()
+    db.close()
+    print(f"Liste eBird ou horloge changée pour {_count(len(changed), 'séquence')} "
+          f'sur {len(seqs)}.')
+
+
+def _archive_pictures(frames, full, tmpdir, row, sheet):
+    """the pictures of a sequence of the archive for Claude, as
+    keywords._pictures makes them for local files: the middle frame, the crop
+    at its focus point, and one contact sheet of `sheet` frames at most, from
+    the thumbnails the index has, so that a long burst on a network drive is
+    not read whole. The thumbnail and the preview of what is read are kept."""
+    from PIL import Image, ImageDraw
+    from .keywords import _focus_crop
+    middle = frames[len(frames) // 2]
+    img = _image(full, big=True)
+    photoindex.save_images(img, middle['name'], preview=True)
+    paths = [os.path.join(tmpdir, 'middle.jpg'), os.path.join(tmpdir, 'focus.jpg')]
+    small = img.copy()
+    small.thumbnail((1400, 1400))
+    small.save(paths[0], quality=88)
+    _focus_crop(img, row).save(paths[1], quality=88)
+    if len(frames) < 2:
+        return paths
+    count = min(sheet, len(frames))
+    pick = [frames[round(k * (len(frames) - 1) / max(1, count - 1))] for k in range(count)]
+    page = Image.new('RGB', (1400, 155 * ((count + 5) // 6)), 'white')
+    draw = ImageDraw.Draw(page)
+    for k, frame in enumerate(pick):
+        thumb = photoindex.thumb_path(frame['name'])
+        try:
+            if not os.path.isfile(thumb):
+                photoindex.save_images(_image(photoindex.resolve(frame['path']), big=False),
+                                       frame['name'])
+            cell = Image.open(thumb).convert('RGB')
+        except Exception:
+            continue
+        cell.thumbnail((231, 153))
+        x, y = (k % 6) * 233, (k // 6) * 155
+        page.paste(cell, (x, y))
+        draw.text((x + 3, y + 2), os.path.splitext(frame['name'])[0].split('_')[-1], fill='yellow')
+    paths.append(os.path.join(tmpdir, 'sheet.jpg'))
+    page.save(paths[2], quality=85)
+    return paths
+
+
+def describe_sequence(seq_id, model=None, effort=None, sheet=12):
+    """Have Claude describe one sequence of the index, where its files are
+    (the button of the search page): its row in the index, as a dict, and the
+    cost in dollars at API prices. The answer goes to the index; nothing is
+    written into the files. Raises RuntimeError when the sequence cannot be
+    read (the archive drive is not mounted)."""
+    cfg = _cfg()
+    path = write_template(instructions_path(), quiet=True)
+    with open(os.path.expanduser(path)) as handle:
+        explanations = handle.read()
+    db = photoindex.connect()
+    frames = photoindex.sequence(db, seq_id)
+    if not frames:
+        raise RuntimeError('séquence inconnue')
+    names = [frame['name'] for frame in frames]
+    middle = frames[len(frames) // 2]
+    full = photoindex.resolve(middle['path'])
+    if not full:
+        raise RuntimeError("le fichier est hors d'atteinte (le disque d'archive est-il monté ?)")
+    # the times of the index for every frame, the EXIF of the middle one only
+    rows = {frame['name']: {'DateTimeOriginal': frame['taken'][:10].replace('-', ':')
+                            + frame['taken'][10:19]} for frame in frames if frame['taken']}
+    exif = read_exif([full]).get(full, {})
+    rows[middle['name']] = dict(rows.get(middle['name'], {}), **exif)
+    stored = db.execute('SELECT bird, clock_offset FROM photos WHERE name = ?',
+                        (middle['name'],)).fetchone()
+    bird = _focal(exif) > cfg['bird_focal_min'] if _focal(exif) else bool(stored['bird'])
+    seq = {'names': names, 'camera': str(exif.get('Model') or ''), 'bird': bird,
+           'when': _when(rows[middle['name']]), 'zone': _zone(exif)}
+    data = _ebird.load()
+    # the clock offset the index found with the days around is kept
+    locate([seq], data, rows, clock=stored['clock_offset'] or 0.0)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        images = _archive_pictures(frames, full, tmpdir, rows[middle['name']], sheet)
+        answer, cost = ask_claude(prompt_for(seq, images, rows, explanations), tmpdir,
+                                  model or cfg.get('keywords_model'),
+                                  effort or cfg.get('doc_effort'))
+    kept, _ = settle(seq, answer, data)
+    photoindex.put(db, [dict(kept, name=name) for name in names]
+                   + [{'name': middle['name'], 'camera': seq['camera'], 'lens': _lens(exif),
+                       'focal': _focal(exif) or None, 'zone': seq['zone']}])
+    row = dict(db.execute('SELECT * FROM photos WHERE seq = ? AND rep = 1', (seq_id,)).fetchone())
+    db.close()
+    return row, cost
+
+
+def thumbnails(year=None, every=False, previews=False, limit=None, jobs=4):
+    """Make ahead of time the thumbnails the search page shows: the frame
+    that stands for each sequence, the newest first (every: all the frames;
+    previews: also the 1600 px image of the viewer; year: only that year).
+    The photos are read from the archive, so the drive has to be mounted;
+    what is made is kept and a run that is stopped goes on from there."""
+    if not os.path.isdir(_config_module.archive_root()):
+        print(f"{_config_module.archive_root()} est introuvable (le disque d'archive est-il "
+              'monté ?) : seules les photos hors archive peuvent être lues.')
+    db = photoindex.connect()
+    where = '1' if every else 'rep = 1'
+    args = []
+    if year:
+        where += ' AND substr(COALESCE(local, taken), 1, 4) = ?'
+        args.append(str(year))
+    rows = db.execute(f'SELECT name, path, rep FROM photos WHERE {where} '
+                      'ORDER BY COALESCE(local, taken) DESC', args).fetchall()
+    db.close()
+    todo = [(row['name'], row['path'], previews and row['rep']) for row in rows
+            if not os.path.isfile(photoindex.thumb_path(row['name']))
+            or (previews and row['rep'] and not os.path.isfile(photoindex.preview_path(row['name'])))]
+    todo = todo[:limit] if limit else todo
+    print(f"{_count(len(todo), 'vignette')} à faire sur {len(rows)} (les plus récentes d'abord).")
+
+    def make(item):
+        name, path, big = item
+        full = photoindex.resolve(path)
+        if not full:
+            return False
+        try:
+            photoindex.save_images(_image(full, big=bool(big)), name, preview=bool(big))
+            return True
+        except Exception:
+            return False
+
+    made = missed = 0
+    try:
+        with ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
+            for count, ok in enumerate(pool.map(make, todo), 1):
+                made, missed = made + bool(ok), missed + (not ok)
+                print(f'  {count}/{len(todo)}', end='\r', flush=True)
+    except KeyboardInterrupt:
+        print('\nArrêt demandé : ce qui est fait est gardé.')
+    print(f"\n{_count(made, 'vignette')} faite{'s' if made > 1 else ''}"
+          + (f', {_count(missed, "photo")} hors d\'atteinte ou illisible{"s" if missed > 1 else ""}.'
+             if missed else '.'))
 
 
 # ---------------------------------------------------------------------------
@@ -849,67 +1112,106 @@ def index_exif(folders, gap=None, force=False, chunk=200):
 
 def main():
     parser = argparse.ArgumentParser(
-        prog='patchdoc',
-        description='patchnames, with every photo described by Claude on the way: the birds '
-                    '(photos taken beyond 200 mm) identified with the eBird checklists as a '
-                    'prior, the files renamed, archived, and indexed for the search page.')
+        prog='patchdoc', add_help=False,
+        description="patchnames, avec chaque photo décrite par Claude au passage : les oiseaux "
+                    '(photos prises au-delà de 200 mm) sont identifiés avec vos listes eBird '
+                    'comme a priori, les fichiers renommés, archivés, et indexés pour la page '
+                    'de recherche.')
+    parser.add_argument('-h', '--help', action='help', help='Afficher cette aide.')
     parser.add_argument('--dry-run', action='store_true',
-                        help="Show Claude's answers; write, move and index nothing.")
+                        help="Essai : montrer les réponses de Claude ; ne rien écrire, déplacer "
+                             'ni indexer.')
     parser.add_argument('--index-only', action='store_true',
-                        help='Describe and index, but leave the files untouched where they are.')
+                        help='Décrire et indexer, sans toucher aux fichiers ni les déplacer.')
     parser.add_argument('--force', action='store_true',
-                        help='Describe again the photos that already have a title.')
+                        help='Décrire de nouveau les photos qui ont déjà un titre.')
     parser.add_argument('--gap', type=float, default=None,
-                        help='Seconds without a shot that start a new sequence (config, 30).')
+                        help='Secondes sans prise de vue qui commencent une nouvelle séquence '
+                             '(config, 30).')
     parser.add_argument('--min-focal', type=float, default=None,
-                        help='A photo taken beyond this focal length (mm) is a bird photo '
+                        help="Une photo prise au-delà de cette focale (mm) est une photo d'oiseau "
                              '(config bird_focal_min, 200).')
-    parser.add_argument('--clock', type=float, default=None, metavar='HOURS',
-                        help='Hours to add to the camera clock to get the time at the place '
-                             '(6 for a camera left on Montreal time in Sweden). Found from the '
-                             'eBird checklists when not given.')
+    parser.add_argument('--clock', type=float, default=None, metavar='HEURES',
+                        help="Heures à ajouter à l'horloge de l'appareil pour avoir l'heure sur "
+                             "place (6 pour un appareil resté à l'heure de Montréal en Suède). "
+                             "Trouvées d'après les listes eBird si l'option est absente.")
     parser.add_argument('--jobs', type=int, default=None,
-                        help='Sequences described at the same time (config doc_jobs, 3).')
+                        help='Séquences décrites en même temps (config doc_jobs, 3).')
+    parser.add_argument('--budget', type=float, default=None, metavar='DOLLARS',
+                        help="Dépense maximale de ce passage, en dollars US au prix de l'API ; "
+                             'les séquences restantes attendent le passage suivant '
+                             '(config doc_budget, 10 ; 0 : sans plafond).')
+    parser.add_argument('--model', default=None,
+                        help='Le modèle de Claude : opus, sonnet (environ la moitié du coût), '
+                             'haiku (environ 3 %% du coût, moins sûr de lui). Par défaut : celui '
+                             'de claude (config keywords_model).')
+    parser.add_argument('--effort', default=None, choices=['low', 'medium', 'high', 'xhigh', 'max'],
+                        help="L'effort de réflexion de Claude (config doc_effort ; par défaut "
+                             'celui de claude).')
     parser.add_argument('--no-backup', action='store_true',
-                        help='Do not keep the originals as <file>_original.')
+                        help='Ne pas garder les originaux sous <fichier>_original.')
     parser.add_argument('--instructions', default=None,
-                        help='The MD file of explanations (~/.config/patchnames/keywords.md).')
-    parser.add_argument('--model', default=None, help='The Claude model (default of claude).')
+                        help="Le fichier MD d'explications (~/.config/patchnames/keywords.md).")
     group = parser.add_mutually_exclusive_group()
     group.add_argument('--refresh', dest='refresh', action='store_true', default=None,
-                       help='Ask eBird for a new export first, whatever the one on disk.')
+                       help="Demander d'abord un nouvel export à eBird, quel que soit celui sur "
+                            'disque.')
     group.add_argument('--no-refresh', dest='refresh', action='store_false',
-                       help='Use the eBird data on disk even if the photos are newer.')
-    sub = parser.add_subparsers(dest='cmd')
+                       help='Utiliser les données eBird sur disque même si les photos sont plus '
+                            'récentes.')
+    sub = parser.add_subparsers(dest='cmd', title='commandes')
 
-    p_gui = sub.add_parser('gui', help='The search page, in the browser.')
+    p_gui = sub.add_parser('gui', help='La page de recherche, dans le navigateur.')
     p_gui.add_argument('--port', type=int, default=None, help='Port (config gui_port, 8765).')
-    p_gui.add_argument('--no-browser', action='store_true', help='Do not open the browser.')
+    p_gui.add_argument('--no-browser', action='store_true', help='Ne pas ouvrir le navigateur.')
+    p_gui.add_argument('--no-vignettes', action='store_true',
+                       help="Ne pas faire en arrière-plan les vignettes qui manquent.")
 
     p_index = sub.add_parser(
-        'index', help='Add the photos already in the archive to the index, from their names '
-                      'and the eBird checklists.')
-    p_index.add_argument('--exif', nargs='+', metavar='DIR', default=None,
-                         help='Read instead what the photos of these folders say of themselves '
-                              '(camera, title, description, keywords); slow on a network drive.')
+        'index', help="Ajouter à l'index les photos déjà dans l'archive, d'après leurs noms et "
+                      'les listes eBird (sans Claude).')
+    p_index.add_argument('--exif', nargs='+', metavar='DOSSIER', default=None,
+                         help="Lire plutôt ce que les photos de ces dossiers disent d'elles-mêmes "
+                              '(appareil, titre, description, mots-clés) ; lent sur un disque '
+                              'réseau.')
     p_index.add_argument('--force', action='store_true',
-                         help='With --exif: read again the photos already read.')
+                         help='Avec --exif : relire les photos déjà lues.')
+    p_index.add_argument('--rematch', action='store_true',
+                         help="Refaire, d'après l'index seul, l'accord de toutes les séquences "
+                              'avec les listes eBird (après un nouvel export).')
 
-    p_ebird = sub.add_parser('ebird', help='The eBird data: what is on disk, a new export.')
+    p_thumbs = sub.add_parser(
+        'vignettes', help="Faire d'avance les vignettes de la page de recherche (disque "
+                          "d'archive monté ; sans Claude).")
+    p_thumbs.add_argument('--year', default=None, metavar='ANNEE', help='Seulement cette année.')
+    p_thumbs.add_argument('--all', action='store_true',
+                          help='Toutes les vues, pas seulement celle qui représente chaque '
+                               'séquence.')
+    p_thumbs.add_argument('--previews', action='store_true',
+                          help="Aussi l'image de 1600 px de la visionneuse.")
+    p_thumbs.add_argument('--limit', type=int, default=None, help='Au plus ce nombre de vignettes.')
+
+    p_ebird = sub.add_parser('ebird', help='Les données eBird : ce qui est sur disque, un '
+                                           'nouvel export.')
     p_ebird.add_argument('--refresh', action='store_true',
-                         help='Ask eBird for a new export and wait for its email.')
+                         help='Demander un nouvel export à eBird et attendre son courriel.')
     p_ebird.add_argument('--login', action='store_true',
-                         help='Keep the eBird and mailbox accounts in the macOS keychain.')
+                         help='Garder les comptes eBird et courriel dans le trousseau de macOS.')
 
     args = parser.parse_args()
     if args.cmd == 'gui':
         from .gui import serve
-        serve(port=args.port, browser=not args.no_browser)
+        serve(port=args.port, browser=not args.no_browser,
+              fill=False if args.no_vignettes else None)
     elif args.cmd == 'index':
         if args.exif:
             index_exif(args.exif, force=args.force)
+        elif args.rematch:
+            rematch()
         else:
             index_archive()
+    elif args.cmd == 'vignettes':
+        thumbnails(year=args.year, every=args.all, previews=args.previews, limit=args.limit)
     elif args.cmd == 'ebird':
         if args.login:
             _ebird.login()
@@ -919,8 +1221,9 @@ def main():
     else:
         document(gap=args.gap, force=args.force, dry_run=args.dry_run,
                  index_only=args.index_only, backup=not args.no_backup,
-                 instructions=args.instructions, model=args.model, jobs=args.jobs,
-                 min_focal=args.min_focal, refresh=args.refresh, clock=args.clock)
+                 instructions=args.instructions, model=args.model, effort=args.effort,
+                 jobs=args.jobs, min_focal=args.min_focal, refresh=args.refresh,
+                 clock=args.clock, budget=args.budget)
 
 
 if __name__ == '__main__':

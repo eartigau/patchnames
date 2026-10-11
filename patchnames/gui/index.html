@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="en">
+<html lang="fr">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>patchdoc &middot; photo search</title>
+  <title>patchdoc &middot; recherche de photos</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -18,81 +18,82 @@
     <div class="site-banner-inner">
       <div class="site-banner-text">
         <h2>patchdoc</h2>
-        <p>Photos described by Claude &middot; birds located with eBird checklists</p>
+        <p>Photos d&eacute;crites par Claude &middot; oiseaux situ&eacute;s gr&acirc;ce aux listes eBird</p>
       </div>
-      <a href="https://eartigau.github.io/" class="home-link">&larr; Home</a>
+      <a href="https://eartigau.github.io/" class="home-link">&larr; Accueil</a>
     </div>
   </div>
 
   <header class="hero">
-    <p class="eyebrow">Photo archive</p>
-    <h1>Find a photo</h1>
-    <p class="subtitle">Search by species, place, date, subject, or any word of a description.
-      Each tile is a sequence of shots; click it for the full description, its eBird
-      checklist and its files.</p>
+    <p class="eyebrow">Archive photo</p>
+    <h1>Trouver une photo</h1>
+    <p class="subtitle">Cherchez par esp&egrave;ce, lieu, date, sujet, ou n&rsquo;importe quel mot d&rsquo;une
+      description. Chaque tuile est une s&eacute;quence de prises de vue ; cliquez dessus pour la
+      description compl&egrave;te, sa liste eBird et ses fichiers.</p>
     <p class="subtitle counts" id="counts"></p>
+    <p class="subtitle counts" id="drive"></p>
   </header>
 
   <main class="layout">
     <section class="card span-3">
       <form id="filters" autocomplete="off">
         <input id="q" class="field big" type="search"
-               placeholder="Search: a species, a place, &laquo; en vol &raquo;, &laquo; juv&eacute;nile &raquo;, a file name&hellip;">
+               placeholder="Recherche : une esp&egrave;ce, un lieu, &laquo; en vol &raquo;, &laquo; juv&eacute;nile &raquo;, un nom de fichier&hellip;">
         <div class="fields">
-          <label>Species
-            <input id="species" class="field" list="speciesList" placeholder="any">
+          <label>Esp&egrave;ce
+            <input id="species" class="field" list="speciesList" placeholder="toutes">
             <datalist id="speciesList"></datalist>
           </label>
-          <label>Place
-            <input id="place" class="field" list="placeList" placeholder="any">
+          <label>Lieu
+            <input id="place" class="field" list="placeList" placeholder="tous">
             <datalist id="placeList"></datalist>
           </label>
-          <label>Region
-            <select id="region" class="field"><option value="">any</option></select>
+          <label>R&eacute;gion
+            <select id="region" class="field"><option value="">toutes</option></select>
           </label>
-          <label>Year
-            <select id="year" class="field"><option value="">any</option></select>
+          <label>Ann&eacute;e
+            <select id="year" class="field"><option value="">toutes</option></select>
           </label>
-          <label>From
+          <label>Du
             <input id="since" class="field" type="date">
           </label>
-          <label>To
+          <label>Au
             <input id="until" class="field" type="date">
           </label>
-          <label>Subject
-            <select id="topic" class="field"><option value="">any</option></select>
+          <label>Sujet
+            <select id="topic" class="field"><option value="">tous</option></select>
           </label>
-          <label>Lens
+          <label>Objectif
             <select id="kind" class="field">
-              <option value="">any</option>
-              <option value="birds">telephoto (bird photos)</option>
-              <option value="others">others</option>
+              <option value="">tous</option>
+              <option value="birds">t&eacute;l&eacute;objectif (photos d&rsquo;oiseaux)</option>
+              <option value="others">autres</option>
             </select>
           </label>
-          <label>Show
+          <label>Afficher
             <select id="flag" class="field">
-              <option value="">everything</option>
-              <option value="described">described</option>
-              <option value="undescribed">not described yet</option>
-              <option value="unsure">identification to confirm</option>
-              <option value="offlist">species not on the eBird checklist</option>
-              <option value="nolist">bird photos without a checklist</option>
+              <option value="">tout</option>
+              <option value="described">les photos d&eacute;crites</option>
+              <option value="undescribed">les photos pas encore d&eacute;crites</option>
+              <option value="unsure">les identifications &agrave; confirmer</option>
+              <option value="offlist">les esp&egrave;ces absentes de la liste eBird</option>
+              <option value="nolist">les photos d&rsquo;oiseaux sans liste eBird</option>
             </select>
           </label>
-          <label>Sort
+          <label>Tri
             <select id="sort" class="field">
-              <option value="new">newest first</option>
-              <option value="old">oldest first</option>
-              <option value="title">by title</option>
+              <option value="new">plus r&eacute;centes</option>
+              <option value="old">plus anciennes</option>
+              <option value="title">par titre</option>
             </select>
           </label>
         </div>
         <div class="options">
           <label class="check"><input id="listed" type="checkbox" checked>
-            With a species, also show the photos taken during an eBird checklist that lists it
-            (not identified on the photo)</label>
+            Avec une esp&egrave;ce, montrer aussi les photos prises pendant une liste eBird qui la
+            contient (esp&egrave;ce non identifi&eacute;e sur la photo)</label>
           <span id="checklistChip" class="chip active" hidden></span>
-          <button id="reset" class="pill" type="button">Reset</button>
+          <button id="reset" class="pill" type="button">R&eacute;initialiser</button>
         </div>
       </form>
     </section>
@@ -107,16 +108,16 @@
 
   <footer class="footer">
     <p>
-      <a href="https://github.com/eartigau/patchnames" target="_blank" rel="noopener">Source on GitHub</a>
+      <a href="https://github.com/eartigau/patchnames" target="_blank" rel="noopener">Code source sur GitHub</a>
       &middot;
-      <a href="https://eartigau.github.io/" target="_blank" rel="noopener">More tools</a>
+      <a href="https://eartigau.github.io/" target="_blank" rel="noopener">Autres outils</a>
     </p>
   </footer>
 
   <div id="viewer" class="lightbox viewer" hidden>
-    <button id="viewerClose" class="lightbox-close" aria-label="Close" type="button">&times;</button>
-    <button id="viewerPrev" class="viewer-nav prev" aria-label="Previous" type="button">&lsaquo;</button>
-    <button id="viewerNext" class="viewer-nav next" aria-label="Next" type="button">&rsaquo;</button>
+    <button id="viewerClose" class="lightbox-close" aria-label="Fermer" type="button">&times;</button>
+    <button id="viewerPrev" class="viewer-nav prev" aria-label="Pr&eacute;c&eacute;dente" type="button">&lsaquo;</button>
+    <button id="viewerNext" class="viewer-nav next" aria-label="Suivante" type="button">&rsaquo;</button>
     <div class="viewer-body">
       <div class="viewer-stage">
         <img id="viewerImg" src="" alt="">

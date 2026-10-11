@@ -3,7 +3,7 @@
  *   /api/facets, /api/search, /api/sequence, /api/checklist,
  *   /thumb/NAME, /preview/NAME, and POST /api/reveal, /api/open.
  * Everything that comes from the index (titles, descriptions, eBird text) is
- * put in the page as text, never as HTML.
+ * put in the page as text, never as HTML. What the page says is in French.
  */
 "use strict";
 
@@ -26,7 +26,7 @@ function el(tag, attrs, ...kids) {
 }
 
 const split = (text) => (text || "").split("; ").map((word) => word.trim()).filter(Boolean);
-const number = (n) => Number(n || 0).toLocaleString("en-CA");
+const number = (n) => Number(n || 0).toLocaleString("fr-CA");
 const image = (kind, name) => `/${kind}/${encodeURIComponent(name)}`;
 
 function region(photo) {
@@ -59,7 +59,7 @@ async function load(reset) {
   }
   const token = state.token;
   state.loading = true;
-  $("status").textContent = "Searching…";
+  $("status").textContent = "Recherche…";
   const params = query();
   params.set("offset", state.offset);
   params.set("limit", PAGE);
@@ -76,10 +76,10 @@ async function load(reset) {
     state.total = data.totals.sequences;
     totals(data.totals);
     $("status").textContent = state.items.length
-      ? (state.done ? "" : `${number(state.items.length)} of ${number(state.total)} sequences shown; scroll for more.`)
-      : "Nothing matches. Loosen a filter, or try another word.";
+      ? (state.done ? "" : `${number(state.items.length)} séquences affichées sur ${number(state.total)} ; faites défiler pour la suite.`)
+      : "Rien ne correspond. Élargissez un filtre ou essayez un autre mot.";
   } catch (err) {
-    if (token === state.token) $("status").textContent = "The search failed: " + err.message;
+    if (token === state.token) $("status").textContent = "La recherche a échoué : " + err.message;
   } finally {
     if (token === state.token) state.loading = false;
   }
@@ -89,14 +89,14 @@ function totals(sums) {
   const stat = (label, value) =>
     el("div", { class: "stat" }, el("div", { class: "label", text: label }), el("div", { class: "value", text: number(value) }));
   $("stats").replaceChildren(
-    stat("Sequences", sums.sequences), stat("Photos", sums.photos),
-    stat("Species identified", sums.species), stat("Places", sums.places));
+    stat("Séquences", sums.sequences), stat("Photos", sums.photos),
+    stat("Espèces identifiées", sums.species), stat("Lieux", sums.places));
 }
 
 function tile(photo, index) {
   const img = el("img", { src: image("thumb", photo.name), loading: "lazy", alt: photo.title || photo.name });
   img.addEventListener("error", () =>
-    img.replaceWith(el("div", { class: "missing", text: "no thumbnail yet (is the archive drive mounted?)" })));
+    img.replaceWith(el("div", { class: "missing", text: "pas encore de vignette (le disque d'archive est-il monté ?)" })));
   const unsure = photo.species && photo.certainty && photo.certainty !== "sûre";
   const marks = el("div", { class: "marks" },
     el("span", {}, photo.seq_n > 1 && el("span", { class: "mark", text: "×" + photo.seq_n })),
@@ -109,10 +109,10 @@ function tile(photo, index) {
       ? [el("div", { class: "name", text: photo.title }),
          el("div", { class: "where", text: [date, photo.location || region(photo)].filter(Boolean).join(" · ") })]
       // not described: the place stands for the title
-      : [el("div", { class: "name none", text: photo.location || "Not described yet" }),
+      : [el("div", { class: "name none", text: photo.location || "Pas encore décrite" }),
          el("div", { class: "where", text: [date, photo.location ? region(photo) : ""].filter(Boolean).join(" · ") })]));
-  figure.title = [photo.title, photo.description, unsure && "Identification to confirm",
-    photo.on_checklist === 0 && "Species not on the eBird checklist"].filter(Boolean).join("\n");
+  figure.title = [photo.title, photo.description, unsure && "Identification à confirmer",
+    photo.on_checklist === 0 && "Espèce absente de la liste eBird"].filter(Boolean).join("\n");
   return figure;
 }
 
@@ -130,7 +130,7 @@ function setFilter(changes) {
 function showChecklistChip() {
   const chip = $("checklistChip");
   chip.hidden = !state.checklist;
-  chip.textContent = state.checklist ? `eBird checklist ${state.checklist}  ×` : "";
+  chip.textContent = state.checklist ? `liste eBird ${state.checklist}  ×` : "";
 }
 
 /* ── Viewer ─────────────────────────────────────────────────────────── */
@@ -196,6 +196,38 @@ async function act(what, name, box) {
   }
 }
 
+// the button of the viewer: Claude describes the sequence where its files are
+async function describe(photo, button, box) {
+  const index = state.items.indexOf(photo);
+  button.disabled = true;
+  box.textContent = "Claude regarde la séquence…";
+  const failed = (message) => { box.textContent = message; button.disabled = false; };
+  try {
+    const asked = await (await fetch("/api/describe", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Patchdoc": "1" },
+      body: JSON.stringify({ name: photo.name }),
+    })).json();
+    if (asked.error) return failed(asked.error);
+    for (let waited = 0; waited < 300; waited += 2) {
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      const job = await (await fetch("/api/job?id=" + encodeURIComponent(asked.job))).json();
+      if (job.state === "error") return failed("Claude n'a pas pu décrire la séquence : " + job.error);
+      if (job.state !== "done") continue;
+      Object.assign(photo, job.photo);
+      if (index >= 0 && $("grid").children[index]) $("grid").children[index].replaceWith(tile(photo, index));
+      if (state.current === index) {
+        $("viewerInfo").replaceChildren(...info(photo));
+        show(photo.name);
+      }
+      return;
+    }
+    failed("Claude met trop de temps à répondre ; réessayez plus tard.");
+  } catch (err) {
+    failed(String(err));
+  }
+}
+
 async function listSpecies(photo, box) {
   if (box.childElementCount) {
     box.replaceChildren();
@@ -203,7 +235,7 @@ async function listSpecies(photo, box) {
   }
   const list = await (await fetch("/api/checklist?sid=" + encodeURIComponent(photo.checklist))).json();
   if (!list.species) {
-    box.replaceChildren(el("p", { class: "mono", text: "This checklist is not in the eBird data of the index." }));
+    box.replaceChildren(el("p", { class: "mono", text: "Cette liste n'est pas dans les données eBird de l'index." }));
     return;
   }
   const mine = split(photo.latin).map((name) => name.toLowerCase());
@@ -217,76 +249,91 @@ async function listSpecies(photo, box) {
 }
 
 function info(photo) {
-  const out = [el("h2", { text: photo.title || "Not described yet" })];
+  const out = [el("h2", { text: photo.title || "Pas encore décrite" })];
   const badge = (text, kind) => el("span", { class: "badge" + (kind ? " " + kind : ""), text });
   const badges = [];
   if (photo.species && photo.certainty) {
-    badges.push(badge("identification: " + photo.certainty, photo.certainty === "sûre" ? "good" : "warn"));
+    badges.push(badge("identification : " + photo.certainty, photo.certainty === "sûre" ? "good" : "warn"));
   }
-  if (photo.on_checklist === 1) badges.push(badge("on the eBird checklist", "good"));
-  if (photo.on_checklist === 0) badges.push(badge("not on the eBird checklist", "alert"));
+  if (photo.on_checklist === 1) badges.push(badge("sur la liste eBird", "good"));
+  if (photo.on_checklist === 0) badges.push(badge("absente de la liste eBird", "alert"));
   if (photo.topic) badges.push(badge(photo.topic));
-  if (photo.seq_n > 1) badges.push(badge(photo.seq_n + " shots"));
+  if (photo.seq_n > 1) badges.push(badge(photo.seq_n + " vues"));
   if (badges.length) out.push(el("div", { class: "badges" }, badges));
   if (photo.description) out.push(el("p", { text: photo.description }));
-  if (photo.note) out.push(el("p", { class: "note", text: "Against the checklist: " + photo.note }));
+  if (photo.note) out.push(el("p", { class: "note", text: "Par rapport à la liste : " + photo.note }));
   if (!photo.described) {
-    out.push(el("p", { class: "mono", text: "Claude has not described this sequence. What is shown comes from "
-      + "its name and from the eBird checklist it was taken during." }));
+    out.push(el("p", { class: "mono", text: "Claude n'a pas décrit cette séquence. Ce qui est affiché vient de "
+      + "son nom et de la liste eBird pendant laquelle elle a été prise." }));
+  }
+  if (photo.reachable && state.claude) {
+    const each = state.claude.each.toFixed(state.claude.each < 0.01 ? 3 : 2).replace(".", ",");
+    const said = el("p", { class: "mono", text: `Un appel à Claude : environ 20 s et ${each} $ US au prix de l'API. `
+      + "La réponse va dans la base, pas dans les fichiers." });
+    out.push(el("div", { class: "actions" },
+      el("button", { class: "pill go", type: "button",
+                     text: photo.described ? "Identifier de nouveau avec Claude" : "Identifier la séquence avec Claude",
+                     onclick: (event) => describe(photo, event.currentTarget, said) })), said);
+  } else if (photo.reachable === false) {
+    out.push(el("p", { class: "mono", text: "Pour demander à Claude d'identifier la séquence, montez le disque d'archive." }));
   }
 
   const species = split(photo.species), latin = split(photo.latin);
   if (species.length) {
-    out.push(el("h3", { text: "Species" }), el("div", { class: "chips" }, species.map((name, k) =>
-      el("span", { class: "chip", text: latin[k] ? `${name} (${latin[k]})` : name, title: "All the photos of this species",
+    out.push(el("h3", { text: "Espèces" }), el("div", { class: "chips" }, species.map((name, k) =>
+      el("span", { class: "chip", text: latin[k] ? `${name} (${latin[k]})` : name, title: "Toutes les photos de cette espèce",
                    onclick: () => setFilter({ species: name }) }))));
   }
   const words = [...split(photo.habitat), ...split(photo.keywords)];
   if (words.length) {
-    out.push(el("h3", { text: "Keywords" }), el("div", { class: "chips" }, words.map((word) =>
+    out.push(el("h3", { text: "Mots-clés" }), el("div", { class: "chips" }, words.map((word) =>
       el("span", { class: "chip", text: word, onclick: () => setFilter({ q: word }) }))));
   }
 
   if (photo.location || photo.checklist) {
-    out.push(el("h3", { text: "Where" }));
+    out.push(el("h3", { text: "Où" }));
     if (photo.location) {
       out.push(el("div", { class: "chips" }, el("span", { class: "chip", text: photo.location,
-        title: "All the photos taken here", onclick: () => setFilter({ place: photo.location }) })));
+        title: "Toutes les photos prises ici", onclick: () => setFilter({ place: photo.location }) })));
     }
     if (region(photo)) out.push(el("p", { text: region(photo) }));
     if (photo.match === "gps") {
-      out.push(el("p", { class: "mono", text: "The eBird place closest to the position of the photo." }));
+      out.push(el("p", { class: "mono", text: "Le lieu eBird le plus proche de la position de la photo." }));
     }
     if (photo.checklist) {
-      const how = { inside: "taken during it", near: "taken within an hour of it",
-                    other: "chosen by Claude among the checklists of the day" }[photo.match] || "";
+      const how = { inside: "photo prise pendant la liste", near: "photo prise à moins d'une heure de la liste",
+                    other: "liste choisie par Claude parmi celles du jour" }[photo.match] || "";
       const box = el("div", {});
       out.push(
         el("p", {}, el("a", { href: "https://ebird.org/checklist/" + encodeURIComponent(photo.checklist),
-                              target: "_blank", rel: "noopener", text: "eBird checklist " + photo.checklist }),
+                              target: "_blank", rel: "noopener", text: "Liste eBird " + photo.checklist }),
           how ? ` (${how})` : ""),
         el("div", { class: "actions" },
-          el("button", { class: "pill", type: "button", text: "Its species", onclick: () => listSpecies(photo, box) }),
-          el("button", { class: "pill", type: "button", text: "All its photos",
+          el("button", { class: "pill", type: "button", text: "Ses espèces", onclick: () => listSpecies(photo, box) }),
+          el("button", { class: "pill", type: "button", text: "Toutes ses photos",
                          onclick: () => setFilter({ checklist: photo.checklist }) })),
         box);
     }
   }
 
-  out.push(el("h3", { text: "When" }));
+  out.push(el("h3", { text: "Quand" }));
   const offset = Number(photo.clock_offset || 0);
-  out.push(el("p", { class: "mono", text: (photo.local || photo.taken || "unknown").slice(0, 16)
-    + (offset ? `  (camera clock ${(photo.taken || "").slice(11, 16)}, off by ${offset > 0 ? "+" : ""}${offset} h)` : "") }));
+  out.push(el("p", { class: "mono", text: (photo.local || photo.taken || "inconnu").slice(0, 16)
+    + (offset ? `  (horloge de l'appareil ${(photo.taken || "").slice(11, 16)}, décalée de ${offset > 0 ? "+" : ""}${offset} h)` : "") }));
 
   const gear = [photo.camera, photo.lens, photo.focal && Math.round(photo.focal) + " mm"].filter(Boolean);
-  if (gear.length) out.push(el("h3", { text: "Camera" }), el("p", { class: "mono", text: gear.join(" · ") }));
+  if (gear.length) out.push(el("h3", { text: "Appareil" }), el("p", { class: "mono", text: gear.join(" · ") }));
 
   const said = el("p", { class: "mono" });
-  out.push(el("h3", { text: "File" }), el("p", { class: "mono", text: photo.path || photo.name }),
-    el("div", { class: "actions" },
-      el("button", { class: "pill", type: "button", text: "Show in Finder", onclick: () => act("reveal", photo.name, said) }),
-      el("button", { class: "pill", type: "button", text: "Open", onclick: () => act("open", photo.name, said) })),
-    said);
+  out.push(el("h3", { text: "Fichier" }), el("p", { class: "mono", text: photo.path || photo.name }));
+  if (photo.reachable !== false) {
+    out.push(el("div", { class: "actions" },
+      el("button", { class: "pill", type: "button", text: "Afficher dans le Finder", onclick: () => act("reveal", photo.name, said) }),
+      el("button", { class: "pill", type: "button", text: "Ouvrir", onclick: () => act("open", photo.name, said) })),
+      said);
+  } else {
+    out.push(el("p", { class: "mono", text: "Hors d'atteinte pour l'instant : le disque d'archive n'est pas monté." }));
+  }
   return out;
 }
 
@@ -300,15 +347,27 @@ async function start() {
   const facets = await (await fetch("/api/facets")).json();
   if (!facets.total) {
     $("results").replaceChildren(el("div", { class: "empty" },
-      el("h2", { text: "No photo in the index yet" }),
-      el("p", { class: "hint", text: "Describe the photos of a folder (they are renamed and archived as "
-        + "patchnames does), or add the photos already in the archive from their names:" }),
-      el("pre", { class: "codeblock", text: "cd /path/to/new/photos\npatchdoc\n\npatchdoc index" })));
-    $("counts").textContent = "index: " + facets.index;
+      el("h2", { text: "Aucune photo dans l'index pour l'instant" }),
+      el("p", { class: "hint", text: "Décrivez les photos d'un dossier (elles sont renommées et archivées comme le "
+        + "fait patchnames), ou ajoutez d'après leurs noms les photos déjà dans l'archive :" }),
+      el("pre", { class: "codeblock", text: "cd /chemin/des/nouvelles/photos\npatchdoc\n\npatchdoc index" })));
+    $("counts").textContent = "index : " + facets.index;
     return;
   }
-  $("counts").textContent = `${number(facets.total)} photos in the index, ${number(facets.described)} described`
-    + (facets.ebird ? ` · eBird data of ${facets.ebird.slice(0, 10)}` : " · no eBird data");
+  $("counts").textContent = `${number(facets.total)} photos dans l'index, dont ${number(facets.described)} décrites`
+    + (facets.ebird ? ` · données eBird du ${facets.ebird.slice(0, 10)}` : " · pas de données eBird");
+  // (a server started before an update of patchdoc says less: relaunch it)
+  state.claude = facets.claude;
+  const store = facets.thumbs && facets.thumbs.total
+    ? ` · vignettes : ${number(facets.thumbs.have)} sur ${number(facets.thumbs.total)}`
+      + (facets.thumbs.filling ? " (les autres se font en arrière-plan)" : "")
+    : "";
+  $("drive").textContent = !facets.archive
+    ? "Ce serveur date d'avant une mise à jour de patchdoc : arrêtez-le (Ctrl-C) et relancez `patchdoc gui`."
+    : (facets.archive.mounted
+      ? `disque d'archive : monté (${facets.archive.mounted})`
+      : "disque d'archive : non monté. La recherche et les vignettes déjà faites restent disponibles ; "
+        + "ouvrir un fichier, faire une vignette ou appeler Claude demande le disque.") + store;
 
   const names = new Set([...facets.species, ...facets.listed].map((row) => row[0]));
   for (const name of [...names].sort((a, b) => a.localeCompare(b, "fr"))) {
@@ -323,7 +382,7 @@ async function start() {
   }
   for (const [country, entry] of [...countries].sort((a, b) => a[1].name.localeCompare(b[1].name, "fr"))) {
     const group = el("optgroup", { label: entry.name });
-    options(group, [[country, `${entry.name}, all (${number(entry.count)})`], ...entry.states]);
+    options(group, [[country, `${entry.name}, tout (${number(entry.count)})`], ...entry.states]);
     $("region").append(group);
   }
   options($("year"), facets.years.map(([year, count]) => [year, `${year} (${number(count)})`]));
@@ -372,4 +431,4 @@ async function start() {
   if (wanted && at >= 0) openViewer(at);
 }
 
-start().catch((err) => { $("status").textContent = "The page could not start: " + err.message; });
+start().catch((err) => { $("status").textContent = "La page n'a pas pu démarrer : " + err.message; });

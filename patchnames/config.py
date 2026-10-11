@@ -9,6 +9,9 @@ CONFIG_PATH = Path(os.environ.get('PATCHNAMES_CONFIG')
 DEFAULTS = {
     'exif_cache_dir': str(Path.home() / 'photo' / 'exifdata'),
     'photo_archive_root': str(Path.home() / 'mnt' / 'URUBU' / 'photo'),
+    # other places the same archive may be mounted at (the drive plugged in
+    #   directly, another network mount): the first one that is there is used
+    'photo_archive_mounts': [],
     'dng_converter': '/Applications/Adobe DNG Converter.app/Contents/MacOS/Adobe DNG Converter',
     'extensions': ['*.NEF', '*.JPG', '*.HEIC', '*.MP4', '*.DNG', '*.MOV', '*.DCM', '*.PSD'],
     'camera_owners': {
@@ -30,8 +33,11 @@ DEFAULTS = {
     #   eBird checklists as a prior (doc.py), and the search page (gui.py)
     'bird_focal_min': 200,      # mm: a photo taken beyond is looked at as a bird photo
     'doc_jobs': 3,              # Claude calls at the same time
+    'doc_effort': None,         # low, medium, high...: None for the default of claude
+    'doc_budget': 10,           # dollars at API prices a run may spend on Claude; 0: no limit
     'index_dir': str(Path.home() / 'photo' / 'patchdoc'),   # the index, thumbnails, previews
     'gui_port': 8765,
+    'gui_fill_thumbs': True,    # the search page makes the missing thumbnails in the background
     # the eBird data (ebird.py)
     'ebird_dir': str(Path.home() / '.config' / 'patchnames' / 'ebird'),
     'ebird_search': ['~/Downloads/ebird_*.zip', '~/Downloads/MyEBirdData*.csv'],
@@ -51,6 +57,20 @@ def load():
                 cfg[k] = v
         return cfg
     return dict(DEFAULTS)
+
+
+def archive_roots(cfg=None):
+    """the places the archive may be mounted at: 'photo_archive_root', then
+    each of 'photo_archive_mounts'"""
+    cfg = cfg or load()
+    places = [cfg['photo_archive_root']] + list(cfg.get('photo_archive_mounts') or [])
+    return [os.path.expanduser(place).rstrip(os.sep) for place in places if place]
+
+
+def archive_root(cfg=None):
+    """the archive where it is mounted now; its usual place when it is not"""
+    roots = archive_roots(cfg)
+    return next((root for root in roots if os.path.isdir(root)), roots[0])
 
 
 def init():

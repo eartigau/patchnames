@@ -108,6 +108,17 @@
   border-color: var(--accent);
 }
 
+.pill.go {
+  color: var(--accent);
+  border-color: rgba(98, 194, 255, 0.5);
+  padding: 6px 14px;
+}
+
+.pill:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
 /* ── Results ────────────────────────────────────────────────────────── */
 
 .stats-grid.four {
