@@ -13,6 +13,9 @@ The page (gui/index.html, app.js) asks for:
     /api/describe            (POST) have Claude describe a sequence
     /api/write               (POST) write into its files what the index says
     /api/job?id=             how that is going
+    /api/batch               (POST) the same for a list of sequences, in the
+                             background; (GET) how that is going
+    /api/batch/stop          (POST) drop the sequences still waiting
 
 Thumbnails and previews come from the index folder, a local store that makes
 browsing fast and needs no drive; one that is missing is made from the photo
@@ -27,7 +30,10 @@ sequence with its place and the position of its eBird checklist. The page
 has the answer as soon as Claude gives it; the files follow, a long burst on
 a network drive taking minutes, and a write cut short by stopping the server
 is finished the next time it starts. "Écrire dans les fichiers" does the
-second step alone. The calls of a session stop at config 'doc_budget'.
+second step alone. The button above the results does both for every
+sequence shown that has no description yet, two at a time in the background:
+it goes on when the page is closed, and the page says how far it is when it
+comes back. The calls of a session stop at config 'doc_budget'.
 
 The server listens on 127.0.0.1 only, answers only to its own address (so
 that no other site can reach it through the browser), and the actions that
@@ -62,6 +68,13 @@ _store = {'have': 0, 'total': 0, 'filling': False}
 #: the sequences Claude was asked to describe from the page, {seq: state}, and
 #:  what that cost since the server started
 _jobs, _lock, _spent = {}, threading.Lock(), {'total': 0.0}
+#: the batch of the button above the results: the sequences waiting, those
+#:  being done, and what became of the others
+_batch = {'waiting': [], 'active': [], 'total': 0, 'done': 0, 'failed': 0, 'note': '',
+          'finished': [], 'workers': 0}
+#: sequences of a batch done at the same time (each reads and rewrites files
+#:  of the archive)
+BATCH_JOBS = 2
 
 
 def _db():
@@ -173,6 +186,72 @@ def _work(seq, ask):
         tell(state='error', error=str(exc))
 
 
+def _batch_add(names):
+    """queue for Claude the sequences of these photos that have no
+    description yet; what was queued and what was left out"""
+    if not _archive()['mounted']:
+        return {'error': "Le disque d'archive n'est pas monté : Claude ne peut pas voir les "
+                         'séquences.'}
+    db = _db()
+    seqs, described = [], 0
+    for name in names[:5000]:
+        row = db.execute('SELECT seq, described FROM photos WHERE name = ?', (str(name),)).fetchone()
+        if row is None or not row['seq']:
+            continue
+        if row['described']:
+            described += 1
+        elif row['seq'] not in seqs:
+            seqs.append(row['seq'])
+    db.close()
+    with _lock:
+        if not (_batch['waiting'] or _batch['active']):
+            # a new batch: the count of the last one is forgotten
+            _batch.update(total=0, done=0, failed=0, note='', finished=[])
+        new = [seq for seq in seqs if seq not in _batch['waiting'] and seq not in _batch['active']]
+        _batch['waiting'] += new
+        _batch['total'] += len(new)
+        start = max(0, min(BATCH_JOBS, len(_batch['waiting'])) - _batch['workers'])
+        _batch['workers'] += start
+    for _ in range(start):
+        threading.Thread(target=_batch_worker, daemon=True).start()
+    return {'queued': len(new), 'described': described}
+
+
+def _batch_worker():
+    """take the sequences of the batch one after the other until none is
+    left, the batch is stopped, or the calls of the session reach the budget"""
+    while True:
+        budget = float(_config_module.load().get('doc_budget') or 0)
+        with _lock:
+            if _batch['waiting'] and budget and _spent['total'] >= budget:
+                _batch['note'] = (f"Plafond d'appels à Claude de cette session atteint : "
+                                  f"{len(_batch['waiting'])} séquences laissées (config doc_budget ; "
+                                  'relancez patchdoc gui pour repartir de zéro).')
+                _batch['waiting'] = []
+            if not _batch['waiting']:
+                _batch['workers'] -= 1
+                return
+            seq = _batch['waiting'].pop(0)
+            _batch['active'].append(seq)
+        _work(seq, True)
+        with _lock:
+            job = _jobs.get(seq, {})
+            _batch['active'].remove(seq)
+            _batch['done' if job.get('state') == 'done' else 'failed'] += 1
+            _batch['finished'].append({'seq': seq, 'photo': job.get('photo'),
+                                       'error': job.get('error')})
+
+
+def _batch_status(since=0):
+    """how the batch goes, with what became of the sequences finished since
+    the `since` first ones"""
+    with _lock:
+        return {'total': _batch['total'], 'done': _batch['done'], 'failed': _batch['failed'],
+                'waiting': len(_batch['waiting']), 'active': len(_batch['active']),
+                'running': bool(_batch['waiting'] or _batch['active']), 'note': _batch['note'],
+                'finished': _batch['finished'][since:], 'next': len(_batch['finished'])}
+
+
 def _resume(stop):
     """finish writing into their files the sequences a stopped server left
     waiting, once the archive is there"""
@@ -276,6 +355,8 @@ class Handler(BaseHTTPRequestHandler):
             elif url.path == '/api/job':
                 with _lock:
                     self._send(200, _jobs.get(args.get('id', ''), {'state': 'unknown'}))
+            elif url.path == '/api/batch':
+                self._send(200, _batch_status(int(args.get('since') or 0)))
             else:
                 self._send(404, {'error': 'introuvable'})
         except (BrokenPipeError, ConnectionResetError):
@@ -288,11 +369,24 @@ class Handler(BaseHTTPRequestHandler):
             return
         # a header no other site can send without asking first, and never gets
         if self.headers.get('X-Patchdoc') != '1' or self.path not in (
-                '/api/reveal', '/api/open', '/api/describe', '/api/write'):
+                '/api/reveal', '/api/open', '/api/describe', '/api/write', '/api/batch',
+                '/api/batch/stop'):
             self._send(403, {'error': 'refusé'})
             return
         try:
             body = json.loads(self.rfile.read(int(self.headers.get('Content-Length') or 0)))
+            if self.path == '/api/batch':
+                self._send(200, _batch_add(list(body.get('names') or [])))
+                return
+            if self.path == '/api/batch/stop':
+                with _lock:
+                    left = len(_batch['waiting'])
+                    _batch['total'] -= left
+                    _batch['waiting'] = []
+                    _batch['note'] = (f'Arrêt demandé : {left} séquences retirées de la file ; '
+                                      'celles en cours se terminent.') if left else _batch['note']
+                self._send(200, {'ok': True})
+                return
             db = _db()
             row = db.execute('SELECT path, seq FROM photos WHERE name = ?',
                              (str(body.get('name')),)).fetchone()

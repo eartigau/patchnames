@@ -11,6 +11,9 @@ const $ = (id) => document.getElementById(id);
 const FIELDS = ["q", "species", "place", "region", "year", "since", "until", "topic", "kind", "flag", "sort"];
 const PAGE = 60;
 const state = { items: [], offset: 0, done: false, loading: false, token: 0, current: -1, checklist: "", total: 0 };
+// the batch of the button above the results: how many finished sequences
+// this page has taken in, its timer, and when the button was first clicked
+const batch = { since: 0, timer: null, armed: 0 };
 
 function el(tag, attrs, ...kids) {
   const node = document.createElement(tag);
@@ -75,6 +78,7 @@ async function load(reset) {
     state.done = data.photos.length < PAGE;
     state.total = data.totals.sequences;
     totals(data.totals);
+    batchButton();
     $("status").textContent = state.items.length
       ? (state.done ? "" : `${number(state.items.length)} séquences affichées sur ${number(state.total)} ; faites défiler pour la suite.`)
       : "Rien ne correspond. Élargissez un filtre ou essayez un autre mot.";
@@ -83,6 +87,92 @@ async function load(reset) {
   } finally {
     if (token === state.token) state.loading = false;
   }
+}
+
+/* ── The sequences shown, identified by Claude in the background ────── */
+
+const plural = (n, one, many) => (n > 1 ? `${number(n)} ${many}` : `${n} ${one}`);
+const undescribed = () => state.items.filter((photo) => !photo.described && photo.reachable !== false);
+
+async function post(path, body) {
+  const reply = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Patchdoc": "1" },
+    body: JSON.stringify(body || {}),
+  });
+  return reply.json();
+}
+
+// put again in the page a sequence the index has just learned more about
+function refresh(index) {
+  if (index < 0) return;
+  const photo = state.items[index];
+  if ($("grid").children[index]) $("grid").children[index].replaceWith(tile(photo, index));
+  if (state.current === index) {
+    $("viewerInfo").replaceChildren(...info(photo));
+    show(photo.name);
+  }
+}
+
+function batchButton() {
+  $("batch").hidden = !state.claude || !state.items.length;
+  const count = undescribed().length;
+  batch.armed = 0;
+  $("batchGo").disabled = !count;
+  $("batchGo").textContent = count
+    ? `Identifier avec Claude ${count > 1 ? "les " + number(count) + " séquences affichées" : "la séquence affichée"} sans description`
+    : "Toutes les séquences affichées sont décrites";
+  $("batchGo").title = "Claude regarde en arrière-plan chaque séquence affichée qui n'a pas de description, "
+    + "deux à la fois ; les réponses sont écrites dans la base et dans l'en-tête des fichiers. "
+    + "Faites défiler pour en afficher davantage.";
+}
+
+async function batchGo() {
+  const todo = undescribed();
+  if (!todo.length) return;
+  if (Date.now() - batch.armed > 8000) {        // a first click says what a second one will do
+    batch.armed = Date.now();
+    $("batchGo").textContent = `Confirmer : ${plural(todo.length, "appel", "appels")} à Claude, en arrière-plan`;
+    return;
+  }
+  const reply = await post("/api/batch", { names: todo.map((photo) => photo.name) });
+  batchButton();
+  if (reply.error) {
+    $("batchStatus").textContent = reply.error === "refusé"
+      ? "Ce serveur date d'avant cette fonction : arrêtez-le (Ctrl-C) et relancez `patchdoc gui`."
+      : reply.error;
+    return;
+  }
+  batch.since = 0;
+  watchBatch();
+}
+
+async function watchBatch() {
+  clearTimeout(batch.timer);
+  let status;
+  try {
+    status = await (await fetch("/api/batch?since=" + batch.since)).json();
+  } catch (err) {
+    return;
+  }
+  if (status.total === undefined) return;        // a server from before this
+  for (const item of status.finished) {
+    const index = state.items.findIndex((photo) => photo.seq === item.seq);
+    if (index >= 0 && item.photo) {
+      Object.assign(state.items[index], item.photo);
+      refresh(index);
+    }
+  }
+  batch.since = status.next;
+  $("batchStop").hidden = !status.running;
+  const failed = status.failed ? `, ${plural(status.failed, "échec", "échecs")}` : "";
+  $("batchStatus").textContent = !status.total && !status.note ? ""
+    : (status.running
+      ? `Claude en arrière-plan : ${status.done + status.failed} sur ${plural(status.total, "séquence", "séquences")}${failed}, ${status.active} en cours.`
+      : `Identification terminée : ${status.done} sur ${plural(status.total, "séquence", "séquences")}${failed}.`)
+      + (status.note ? " " + status.note : "");
+  if (status.finished.length || !status.running) batchButton();
+  if (status.running) batch.timer = setTimeout(watchBatch, 3000);
 }
 
 function totals(sums) {
@@ -208,8 +298,8 @@ async function work(photo, what) {
   };
   const update = (fresh) => {
     Object.assign(photo, fresh);
-    if (index >= 0 && $("grid").children[index]) $("grid").children[index].replaceWith(tile(photo, index));
-    if (state.current === index) show(photo.name);
+    refresh(index);
+    batchButton();
   };
   say(what === "describe" ? "Claude regarde la séquence…" : "Écriture dans les fichiers…", true);
   try {
@@ -431,6 +521,8 @@ async function start() {
     load(true);
   });
 
+  $("batchGo").addEventListener("click", batchGo);
+  $("batchStop").addEventListener("click", async () => { await post("/api/batch/stop"); watchBatch(); });
   $("viewerClose").addEventListener("click", closeViewer);
   $("viewerPrev").addEventListener("click", () => step(-1));
   $("viewerNext").addEventListener("click", () => step(1));
@@ -451,6 +543,7 @@ async function start() {
   await load(true);
   const at = state.items.findIndex((photo) => photo.name === wanted);
   if (wanted && at >= 0) openViewer(at);
+  watchBatch();         // a batch started before the page was opened goes on
 }
 
 start().catch((err) => { $("status").textContent = "La page n'a pas pu démarrer : " + err.message; });

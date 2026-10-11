@@ -126,6 +126,20 @@
   margin-bottom: 14px;
 }
 
+.batch {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.batch .mono {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
 .gallery-grid {
   grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
 }
