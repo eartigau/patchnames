@@ -190,7 +190,8 @@ checklists give the place. Such photos are not described, but they can be found 
 date, and by the species of their checklist (the box under the filters). The
 second reads the title, description and keywords already written into the
 files (by `patchdoc` or `patchnames keywords`), and the camera and lens;
-count a second per photo on a network drive.
+count a second or two per photo on a network drive. It works day by day and
+skips what it has read, so it can be stopped and started again.
 
 ## Configuration
 

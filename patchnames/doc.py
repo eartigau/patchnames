@@ -208,16 +208,22 @@ def sequences(files, rows, gap, is_bird):
     return out
 
 
-def locate(seqs, data, rows=None, clock=None):
+def locate(seqs, data, rows=None, clock=None, before=None):
     """give each sequence its clock offset and its eBird match: the offsets
-    come from the bird sequences of each camera and apply to all it took
-    (clock: the offset in hours, when the photographer knows it)"""
+    come from the bird sequences of each camera and apply to all it took.
+
+    clock: the offset in hours, when the photographer knows it. before:
+    {day: hours}, offsets found earlier with more days around, kept for a
+    camera that does not record its time zone (a few days alone would not
+    move its clock)."""
     rows = rows or {}
-    moments = {}
+    moments, zoned = {}, set()
     for seq in seqs:
         if seq['bird'] and seq['when']:
             zone = _zone(rows.get(seq['names'][len(seq['names']) // 2], {}))
             moments.setdefault(seq['camera'], []).append((seq['when'], zone))
+            if zone is not None:
+                zoned.add(seq['camera'])
     offsets = {}
     if data and clock is None:
         offsets = {camera: data.offsets(*zip(*pairs)) for camera, pairs in moments.items()}
@@ -226,8 +232,13 @@ def locate(seqs, data, rows=None, clock=None):
         if data is None:
             continue
         if seq['when']:
-            if clock is None:
-                seq['offset'] = offsets.get(seq['camera'], {}).get(seq['when'].date(), 0.0)
+            day = seq['when'].date()
+            if clock is not None:
+                pass
+            elif before and day in before and seq['camera'] not in zoned:
+                seq['offset'] = before[day]
+            else:
+                seq['offset'] = offsets.get(seq['camera'], {}).get(day, 0.0)
             seq['match'] = data.match(seq['when'], seq['offset'])
         row = rows.get(seq['names'][len(seq['names']) // 2], {})
         if seq['match'] and seq['match'].checklist:
@@ -778,8 +789,9 @@ def index_archive(root=None, gap=None):
 def index_exif(folders, gap=None, force=False, chunk=200):
     """Bring to the index what the photos of folders say of themselves:
     camera, lens, focal length, and the title, description and keywords
-    written by patchdoc or `patchnames keywords`. Slow on a network drive;
-    the photos already read are skipped unless force."""
+    written by patchdoc or `patchnames keywords`. Slow on a network drive:
+    the photos are read and kept day by day, so that a run that is stopped
+    is not lost, and those already read are skipped unless force."""
     cfg = _cfg()
     gap = cfg['keywords_gap'] if gap is None else gap
     extensions = tuple('.' + pattern.rsplit('.', 1)[1] for pattern in IMAGE_PATTERNS)
@@ -788,32 +800,46 @@ def index_exif(folders, gap=None, force=False, chunk=200):
     if data:
         photoindex.sync_ebird(db, data)
     read = {row['name'] for row in db.execute('SELECT name FROM photos WHERE camera IS NOT NULL')}
+    # the clock offset the index has for each day (the most common one last)
+    before = {datetime.strptime(day, '%Y-%m-%d').date(): offset or 0.0
+              for day, offset, _ in db.execute(
+                  'SELECT substr(taken, 1, 10), clock_offset, COUNT(*) FROM photos '
+                  'WHERE bird = 1 AND taken IS NOT NULL GROUP BY 1, 2 ORDER BY 3')}
     for folder in folders:
         folder = os.path.abspath(os.path.expanduser(folder))
         files = sorted(os.path.join(base, name) for base, _, names in os.walk(folder)
                        for name in names if name.lower().endswith(extensions)
                        and not name.startswith('.'))
         files = [path for path in files if force or os.path.basename(path) not in read]
+        # a day of a folder at a time: the date at the start of a canonical name
+        days = {}
+        for path in files:
+            parsed = NAME.match(os.path.basename(path))
+            days.setdefault((os.path.dirname(path), parsed.group(1) if parsed else ''),
+                            []).append(path)
         print(f'{folder}: {len(files)} photos to read.')
-        rows = {}
-        for start in range(0, len(files), chunk):
-            part = files[start:start + chunk]
-            rows.update({os.path.basename(src): row
-                         for src, row in read_exif(part, fast=True).items()})
-            print(f'  {min(start + chunk, len(files))}/{len(files)}', end='\r', flush=True)
-        if not rows:
-            continue
-        print()
-        paths = {os.path.basename(path): path for path in files}
-        seqs = sequences(sorted(rows), rows, gap,
-                         lambda row: _focal(row) > cfg['bird_focal_min'])
-        locate(seqs, data, rows)
-        records = []
-        for seq in seqs:
-            records += frame_records(seq, said_of(seq, rows, data), rows, paths)
-        photoindex.put(db, records)
-        print(f'  {len(seqs)} sequences, '
-              f'{sum(1 for record in records if record.get("title") and record["rep"])} described.')
+        count = 0
+        for (base, day), part in days.items():
+            rows = {}
+            for start in range(0, len(part), chunk):
+                rows.update({os.path.basename(src): row for src, row
+                             in read_exif(part[start:start + chunk], fast=True).items()})
+                print(f'  {count + min(start + chunk, len(part))}/{len(files)}',
+                      end='\r', flush=True)
+            count += len(part)
+            if not rows:
+                continue
+            paths = {os.path.basename(path): path for path in part}
+            seqs = sequences(sorted(rows), rows, gap,
+                             lambda row: _focal(row) > cfg['bird_focal_min'])
+            locate(seqs, data, rows, before=before)
+            records = []
+            for seq in seqs:
+                records += frame_records(seq, said_of(seq, rows, data), rows, paths)
+            photoindex.put(db, records)
+            told = sum(1 for record in records if record.get('title') and record['rep'])
+            print(f'  {os.path.relpath(base, folder)} {day}: {len(part)} photos, '
+                  f'{len(seqs)} sequences, {told} described.')
     db.close()
 
 
