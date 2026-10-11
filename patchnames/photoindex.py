@@ -86,6 +86,7 @@ CREATE TABLE IF NOT EXISTS checklists {TABLES['checklists']};
 CREATE TABLE IF NOT EXISTS observations {TABLES['observations']};
 CREATE INDEX IF NOT EXISTS observations_sid ON observations (sid);
 CREATE TABLE IF NOT EXISTS meta {TABLES['meta']};
+CREATE TABLE IF NOT EXISTS geocode (cell TEXT PRIMARY KEY, answer TEXT);
 """
 
 #: the kinds of tags, and the column of a photo each comes from
@@ -458,6 +459,16 @@ def search(db, sort='new', offset=0, limit=60, **filters):
         f"SELECT COUNT(DISTINCT t.value) FROM tags t JOIN photos p ON p.name = t.name "
         f"WHERE t.kind = 'latin' AND {where}", args).fetchone()[0]
     return [dict(row) for row in rows], dict(totals, species=species)
+
+
+def places(db, **filters):
+    """the places of the sequences that pass the filters, whatever the place
+    asked for, for the map: [(place, latitude, longitude, sequences, photos)]"""
+    where, args = _where(**dict(filters, place=''))
+    return [tuple(row) for row in db.execute(
+        f'SELECT p.location, AVG(p.lat), AVG(p.lon), COUNT(*), SUM(p.seq_n) FROM photos p '
+        f"WHERE {where} AND p.lat IS NOT NULL AND p.lon IS NOT NULL AND p.location != '' "
+        'GROUP BY p.location', args)]
 
 
 def facets(db):

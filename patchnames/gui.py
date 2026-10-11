@@ -6,6 +6,7 @@ The page (gui/index.html, app.js) asks for:
 
     /api/facets              what the filters offer
     /api/search?...          the sequences that pass the filters
+    /api/places?...          their places, for the map
     /api/sequence?seq=       the frames of a sequence
     /api/checklist?sid=      an eBird checklist and its species
     /thumb/NAME /preview/NAME   the images of a photo
@@ -355,6 +356,11 @@ class Handler(BaseHTTPRequestHandler):
                     listed=args.get('listed') == '1', **filters)
                 db.close()
                 self._send(200, {'photos': [_public(row) for row in rows], 'totals': totals})
+            elif url.path == '/api/places':
+                db = _db()
+                filters = {key: args[key] for key in FILTERS if args.get(key)}
+                self._send(200, photoindex.places(db, listed=args.get('listed') == '1', **filters))
+                db.close()
             elif url.path == '/api/sequence':
                 db = _db()
                 self._send(200, photoindex.sequence(db, args.get('seq', '')))

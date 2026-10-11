@@ -40,6 +40,7 @@ DEFAULTS = {
     'gui_fill_thumbs': True,    # the search page makes the missing thumbnails in the background
     'gui_backup': False,        # keep <file>_original when the search page writes into a file
     'raw_app': 'Affinity',      # the application of the "Ouvrir avec" button of a raw file
+    'geocode': True,            # ask OpenStreetMap for the place of a photo that has a position
     # the eBird data (ebird.py)
     'ebird_dir': str(Path.home() / '.config' / 'patchnames' / 'ebird'),
     'ebird_search': ['~/Downloads/ebird_*.zip', '~/Downloads/MyEBirdData*.csv'],

@@ -37,6 +37,65 @@ function region(photo) {
   return [photo.county, photo.state, photo.country_name].filter(Boolean).join(", ");
 }
 
+/* ── Map of the places: discs that gather as one zooms out ───────────── */
+
+const chart = { map: null, layer: null, key: null, places: [] };
+
+function disc(count, many, on) {
+  const size = Math.round(26 + 6 * Math.log10(Math.max(1, count)) * 1.6);
+  return L.divIcon({ html: `<div class="spot${many ? " many" : ""}${on ? " on" : ""}" style="width:${size}px;height:${size}px">${count > 9999 ? Math.round(count / 1000) + "k" : count}</div>`,
+                     className: "", iconSize: [size, size] });
+}
+
+// the discs of the places, the one chosen marked; a disc picks its place
+function drawPlaces() {
+  const chosen = $("place").value.trim().toLowerCase();
+  chart.layer.clearLayers();
+  for (const [place, lat, lon, sequences, photos] of chart.places) {
+    const marker = L.marker([lat, lon], { icon: disc(sequences, false, chosen && place.toLowerCase() === chosen), count: sequences });
+    marker.bindTooltip(`${place} · ${plural(sequences, "séquence", "séquences")}, ${plural(photos, "photo", "photos")}`);
+    marker.on("click", () => {
+      $("place").value = place;
+      drawPlaces();
+      load(true);
+      $("results").scrollIntoView({ behavior: "smooth" });
+    });
+    chart.layer.addLayer(marker);
+  }
+}
+
+// the map follows the filters, except the place itself, so that another can be picked
+async function showPlaces() {
+  if (!window.L || !L.markerClusterGroup) return;         // the map library did not load (offline)
+  const params = query();
+  params.delete("place");
+  if (params.toString() === chart.key) return drawPlaces();
+  chart.key = params.toString();
+  chart.places = await (await fetch("/api/places?" + params)).json();
+  if (!Array.isArray(chart.places)) chart.places = [];    // a server from before the map
+  $("mapCard").hidden = !chart.places.length && !chart.map;
+  $("mapNote").textContent = chart.places.length
+    ? `${plural(chart.places.length, "lieu", "lieux")} pour cette recherche ; cliquez un disque pour voir ses photos, la molette zoome.`
+    : "Aucun lieu connu pour cette recherche.";
+  if (!chart.places.length && !chart.map) return;
+  if (!chart.map) {
+    chart.map = L.map("map", { worldCopyJump: true });
+    // the tiles of OpenStreetMap, which need no key; app.css darkens them
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: '&copy; les contributeurs d\'<a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+    }).addTo(chart.map);
+    chart.layer = L.markerClusterGroup({
+      showCoverageOnHover: false, maxClusterRadius: 46,
+      iconCreateFunction: (cluster) => disc(cluster.getAllChildMarkers().reduce((sum, m) => sum + m.options.count, 0), true),
+    }).addTo(chart.map);
+  }
+  drawPlaces();
+  if (chart.places.length) {
+    chart.map.fitBounds(L.latLngBounds(chart.places.map((row) => [row[1], row[2]])).pad(0.15), { maxZoom: 13 });
+  }
+}
+
 /* ── Sections: bird photos, family photos, the rest ─────────────────── */
 
 // show the section chosen and the filters that go with it; a filter that
@@ -73,6 +132,7 @@ async function load(reset) {
     state.done = false;
     $("grid").replaceChildren();
     history.replaceState(null, "", "?" + query());
+    if (!$("map").hidden) showPlaces();
   } else if (state.loading || state.done) {
     return;
   }
@@ -549,6 +609,19 @@ async function start() {
     setSection("");
   });
 
+  $("mapToggle").addEventListener("click", () => {
+    $("map").hidden = !$("map").hidden;
+    $("mapToggle").textContent = $("map").hidden ? "Afficher la carte" : "Masquer la carte";
+    try { localStorage.setItem("patchdoc.carte", $("map").hidden ? "non" : "oui"); } catch (err) { /* private mode */ }
+    if (!$("map").hidden) { showPlaces(); if (chart.map) chart.map.invalidateSize(); }
+  });
+  try {
+    if (localStorage.getItem("patchdoc.carte") === "non") {
+      $("map").hidden = true;
+      $("mapToggle").textContent = "Afficher la carte";
+      $("mapCard").hidden = false;
+    }
+  } catch (err) { /* private mode */ }
   $("batchGo").addEventListener("click", batchGo);
   $("batchStop").addEventListener("click", async () => { await post("/api/batch/stop"); watchBatch(); });
   $("viewerClose").addEventListener("click", closeViewer);

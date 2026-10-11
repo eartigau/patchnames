@@ -61,6 +61,7 @@ from datetime import datetime, timedelta
 
 from . import config as _config_module
 from . import ebird as _ebird
+from . import geo
 from . import photoindex
 from .keywords import (IMAGE_PATTERNS, UNSURE, _groups, _image, _pictures, _tags, _when,
                        instructions_path, write_template)
@@ -70,8 +71,6 @@ TOPICS = ('oiseau', 'autre animal', 'plante', 'paysage', 'ciel', 'ville et archi
           'personnes', 'objet', 'document', 'autre')
 #: keyword of a photo whose species is not on its eBird checklist
 OFFLIST = 'absent de la liste eBird'
-#: a position within this many km of an eBird place takes its name
-GPS_KM = 2.0
 #: start of GPSAreaInformation in a file whose position is that of its eBird
 #:  checklist, written here
 GPS_MARK = 'eBird'
@@ -254,9 +253,7 @@ def locate(seqs, data, rows=None, clock=None, before=None):
         offsets = {camera: data.offsets(*zip(*pairs)) for camera, pairs in moments.items()}
     for seq in seqs:
         seq['offset'], seq['match'], seq['gps'] = float(clock or 0.0), None, None
-        if data is None:
-            continue
-        if seq['when']:
+        if data is not None and seq['when']:
             day = seq['when'].date()
             if clock is not None:
                 pass
@@ -266,11 +263,12 @@ def locate(seqs, data, rows=None, clock=None, before=None):
                 seq['offset'] = offsets.get(seq['camera'], {}).get(day, 0.0)
             seq['match'] = data.match(seq['when'], seq['offset'])
         row = rows.get(seq['names'][len(seq['names']) // 2], {})
-        if seq['match'] and seq['match'].checklist:
+        if (seq['match'] and seq['match'].checklist) or not own_position(row):
             continue
-        # no checklist, but maybe a position: the eBird place next to it names it
+        # no checklist, but a position of its own (a phone): its place is
+        #   asked online (geo.py)
         try:
-            seq['gps'] = data.nearest(float(row['GPSLatitude']), float(row['GPSLongitude']), GPS_KM)
+            seq['gps'] = geo.spot(float(row['GPSLatitude']), float(row['GPSLongitude']), data)
         except (KeyError, TypeError, ValueError):
             pass
 
@@ -325,9 +323,9 @@ def settle(seq, answer, data):
     if checklist:
         sure.update(_place(checklist))
     elif seq.get('gps'):
-        sure.update(_place(seq['gps'][0]), match='gps')
+        sure.update(_place(seq['gps']), match='gps')
     if not answer:
-        return sure, checklist
+        return sure, checklist or seq.get('gps')
     species = answer.get('especes') or []
     # a photo taken near a list, not during it, is not held against the list
     on_list = _on_list([sp.get('latin', '') for sp in species],
@@ -348,7 +346,7 @@ def settle(seq, answer, data):
         'on_checklist': on_list,
         'described': datetime.now().isoformat(' ', 'seconds'),
     })
-    return sure, checklist
+    return sure, checklist or seq.get('gps')
 
 
 def own_position(row):
@@ -362,11 +360,13 @@ def own_position(row):
 def place_tags(checklist, position=True):
     """the exiftool arguments of the place of a checklist: its names, the
     checklist as the IPTC event, and (position) its latitude and longitude,
-    marked as those of the eBird place, not of the photographer"""
+    marked as those of the eBird place, not of the photographer. A place
+    found from the position of the photo itself (geo.Spot) only has names."""
     country = _ebird.country_name(checklist.country)
-    args = ['-charset', 'iptc=UTF8', '-codedcharacterset=utf8',
-            f'-XMP-iptcExt:Event=eBird {checklist.sid}',
-            f'-XMP-iptcCore:Location={checklist.location}',
+    position = position and bool(checklist.sid)
+    args = ['-charset', 'iptc=UTF8', '-codedcharacterset=utf8']
+    args += [f'-XMP-iptcExt:Event=eBird {checklist.sid}'] if checklist.sid else []
+    args += [f'-XMP-iptcCore:Location={checklist.location}',
             f'-IPTC:Sub-location={checklist.location[:32]}',
             f'-XMP-photoshop:City={checklist.county}', f'-IPTC:City={checklist.county[:32]}',
             f'-XMP-photoshop:State={checklist.state}',
@@ -543,6 +543,11 @@ def _list_text(checklist, full):
 def ebird_text(seq):
     """what the prompt says of the eBird checklists of a sequence"""
     match = seq.get('match')
+    if seq.get('gps'):
+        spot = seq['gps']
+        return (f"La photo porte une position : elle a été prise à {spot.location} "
+                f"({', '.join(part for part in (spot.county, spot.state) if part)}, "
+                f"{_ebird.country_name(spot.country)}). Pas de liste eBird (\"liste\" : null).")
     if match is None or not (match.checklist or match.others):
         return ("Le photographe n'a pas de liste eBird ce jour-là : identifie sans a priori "
                 '("liste" : null).')
@@ -669,7 +674,7 @@ def _say(seq):
         how = 'pendant' if match.kind == 'inside' else "à moins d'une heure de"
         return f'{how} la liste eBird {match.checklist.sid}, {match.checklist.label()}{clock}'
     if seq.get('gps'):
-        return f'à {seq["gps"][1]:.1f} km de {seq["gps"][0].location}'
+        return f'position de la photo : {seq["gps"].location}'
     return 'aucune liste eBird'
 
 
@@ -1166,6 +1171,10 @@ def write_sequence(seq_id, progress=None, chunk=6):
         raise RuntimeError('séquence inconnue')
     data = _ebird.load()
     checklist = data.lists.get(row['checklist']) if data and row['checklist'] else None
+    if checklist is None and row['match'] == 'gps' and row['location']:
+        # a place found from the position of the photos themselves
+        checklist = geo.Spot(row['location'], row['county'] or '', row['state'] or '',
+                             row['country'] or '', row['lat'], row['lon'])
     args = file_tags(answer_of(row), dict(row, note=row['note'] or ''), checklist)
     if not args:
         raise RuntimeError("la base n'a rien à écrire pour cette séquence (ni description, "
