@@ -10,7 +10,8 @@ requires-python = ">=3.8"
 dependencies = ["pillow"]
 
 [project.optional-dependencies]
-# patchdoc finds and compares faces with OpenCV, on this machine
+# patchdoc finds and compares faces, and stitches panoramas, with OpenCV,
+# on this machine
 faces = ["opencv-python", "numpy"]
 
 [project.scripts]

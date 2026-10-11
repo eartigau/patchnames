@@ -149,6 +149,19 @@ Comment cela marche :
   de nouveau (`--force`), seulement indexées. `--index-only` décrit et
   indexe sans toucher aux fichiers.
 
+### Les panoramas
+
+Une séquence prise en tournant l'appareil, chaque vue recouvrant la
+suivante, est assemblée en une seule image. `patchdoc` la reconnaît sur
+votre machine (les vues avancent toutes dans le même sens, d'une bonne
+partie du cadre mais pas de tout) : une rafale de la même vue n'est pas un
+panorama. L'assemblage est fait par OpenCV, sur des vues réduites à
+`pano_size` pixels (3000 ; 0 pour la pleine taille, lent), et le panorama
+est un JPEG à côté de ses vues, daté comme la première, dont le modèle
+d'appareil porte « (panorama) ». Il est décrit, renommé, archivé et indexé
+comme une photo de plus. Dans la visionneuse, « Assembler le panorama » le
+fait pour une séquence déjà archivée.
+
 ### Ce que cela consomme
 
 Seules les photos du dossier courant sont montrées à Claude, et la

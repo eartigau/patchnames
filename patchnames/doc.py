@@ -63,6 +63,7 @@ from . import config as _config_module
 from . import ebird as _ebird
 from . import faces
 from . import geo
+from . import pano
 from . import photoindex
 from .keywords import (IMAGE_PATTERNS, UNSURE, _groups, _image, _pictures, _tags, _when,
                        instructions_path, write_template)
@@ -695,6 +696,79 @@ def _say(seq):
     return 'aucune liste eBird'
 
 
+def panoramas(files, rows, gap, min_focal, dry_run):
+    """stitch the sequences of the current directory that are panoramas
+    (pano.py); the files made. In a dry run they are only said."""
+    made = []
+    if not pano.available():
+        return made
+    for seq in sequences(files, rows, gap, lambda row: _focal(row) > min_focal):
+        names = seq['names']
+        target = f'pano_{os.path.splitext(names[0])[0]}.jpg'
+        if (seq['bird'] or not pano.FRAMES[0] <= len(names) <= pano.FRAMES[1]
+                or os.path.exists(target)
+                or any(pano.MARK in str(rows.get(name, {}).get('Model') or '') for name in names)):
+            continue
+        try:
+            if not pano.sweep([_image(name, big=False) for name in names]):
+                continue
+            if dry_run:
+                print(f'Panorama : {names[0]} .. {names[-1]} ({len(names)} vues), non assemblé '
+                      'pendant un essai.')
+                continue
+            picture = pano.stitch([_image(name, big=True) for name in names],
+                                  int(_cfg().get('pano_size') or 0))
+        except Exception as exc:
+            print(f'Panorama : {names[0]} .. {names[-1]} : {exc}')
+            continue
+        if picture is None:
+            print(f"Panorama : {names[0]} .. {names[-1]} : les vues n'ont pas pu être assemblées.")
+            continue
+        made.append(pano.save(picture, names[0], '.', len(names)))
+        print(f'Panorama : {names[0]} .. {names[-1]} ({len(names)} vues) assemblé en '
+              f'{os.path.basename(made[-1])}, {picture.size[0]} x {picture.size[1]} px.')
+    return made
+
+
+def panorama_of(seq_id):
+    """Stitch a sequence of the index where its files are (the button of the
+    search page): the panorama is written next to its frames, under a
+    canonical name, and added to the index; its row there, as a dict.
+    Raises RuntimeError when the frames cannot be read or put together."""
+    from .core import get_exif
+    cfg = _cfg()
+    db = photoindex.connect()
+    frames = photoindex.sequence(db, seq_id)
+    paths = [photoindex.resolve(frame['path']) for frame in frames]
+    if not frames or not all(paths):
+        raise RuntimeError("les fichiers sont hors d'atteinte (le disque d'archive est-il monté ?)")
+    if not pano.FRAMES[0] <= len(paths) <= pano.FRAMES[1]:
+        raise RuntimeError(f'un panorama a de {pano.FRAMES[0]} à {pano.FRAMES[1]} vues')
+    pictures = [_image(path, big=True) for path in paths]
+    if not pano.sweep(pictures):
+        raise RuntimeError('ces vues ne se suivent pas comme celles d\'un panorama')
+    picture = pano.stitch(pictures, int(cfg.get('pano_size') or 0))
+    if picture is None:
+        raise RuntimeError("les vues n'ont pas pu être assemblées")
+    made = pano.save(picture, paths[0], os.path.dirname(paths[0]), len(paths))
+    # its canonical name, as patchnames gives it
+    final = os.path.join(os.path.dirname(made), get_exif(made)['REFERENCE NAME'])
+    os.replace(made, final)
+    name = os.path.basename(final)
+    rows = {name: read_exif([final]).get(final, {})}
+    data = _ebird.load()
+    seqs = sequences([name], rows, cfg['keywords_gap'], lambda row: False)
+    source = db.execute('SELECT clock_offset FROM photos WHERE seq = ? AND rep = 1',
+                        (seq_id,)).fetchone()
+    locate(seqs, data, rows, clock=(source['clock_offset'] if source else 0.0) or 0.0)
+    kept = dict(said_of(seqs[0], rows, data), keywords=f'panorama{photoindex.SEP}{len(paths)} vues')
+    photoindex.put(db, frame_records(seqs[0], kept, rows, {name: final}))
+    photoindex.save_images(picture, name, preview=True)
+    row = dict(db.execute('SELECT * FROM photos WHERE name = ?', (name,)).fetchone())
+    db.close()
+    return row
+
+
 def _cost_key(model, effort):
     return f'cost_per_sequence:{model or "default"}:{effort or "default"}'
 
@@ -736,6 +810,10 @@ def document(gap=None, force=False, dry_run=False, index_only=False, backup=True
         print('Aucune photo dans ce dossier.')
         return
     rows = {os.path.basename(src): row for src, row in read_exif(files).items()}
+    if panoramas(files, rows, gap, min_focal, dry_run):
+        # the panoramas just made are photos to describe like the others
+        files = _photos()
+        rows = {os.path.basename(src): row for src, row in read_exif(files).items()}
     todo = [f for f in files if force or not rows.get(f, {}).get('Title')]
     seqs = sequences(todo, rows, gap, lambda row: _focal(row) > min_focal)
     # the photos already described are indexed from what they say of themselves

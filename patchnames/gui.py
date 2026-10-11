@@ -19,6 +19,7 @@ The page (gui/index.html, app.js) asks for:
     /api/batch/stop          (POST) drop the sequences still waiting
     /api/faces?name=         the faces of a photo, looked for if nobody did
     /api/face                (POST) who a face is
+    /api/pano                (POST) stitch a sequence into a panorama
 
 Thumbnails and previews come from the index folder, a local store that makes
 browsing fast and needs no drive; one that is missing is made from the photo
@@ -385,6 +386,7 @@ class Handler(BaseHTTPRequestHandler):
                 facets = dict(photoindex.facets(db), index=photoindex.index_dir(),
                               archive=_archive(), thumbs=dict(_store), raw_app=_raw_app(),
                               faces=__import__('patchnames.faces', fromlist=['x']).available(),
+                              pano=__import__('patchnames.pano', fromlist=['x']).available(),
                               claude={'each': each, 'spent': _spent['total'],
                                       'budget': float(cfg.get('doc_budget') or 0)})
                 db.close()
@@ -433,13 +435,25 @@ class Handler(BaseHTTPRequestHandler):
         # a header no other site can send without asking first, and never gets
         if self.headers.get('X-Patchdoc') != '1' or self.path not in (
                 '/api/reveal', '/api/open', '/api/describe', '/api/write', '/api/batch',
-                '/api/batch/stop', '/api/face'):
+                '/api/batch/stop', '/api/face', '/api/pano'):
             self._send(403, {'error': 'refusé'})
             return
         try:
             body = json.loads(self.rfile.read(int(self.headers.get('Content-Length') or 0)))
             if self.path == '/api/batch':
                 self._send(200, _batch_add(list(body.get('names') or [])))
+                return
+            if self.path == '/api/pano':
+                from .doc import panorama_of
+                db = _db()
+                row = db.execute('SELECT seq FROM photos WHERE name = ?',
+                                 (str(body.get('name')),)).fetchone()
+                db.close()
+                try:
+                    self._send(200, {'photo': _public(panorama_of(row['seq']))} if row
+                               else {'error': 'photo inconnue'})
+                except RuntimeError as exc:
+                    self._send(200, {'error': f'Pas de panorama : {exc}.'})
                 return
             if self.path == '/api/face':
                 from . import faces

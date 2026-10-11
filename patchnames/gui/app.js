@@ -619,7 +619,17 @@ function info(photo) {
       el("button", { class: "pill", type: "button", text: "Afficher dans le Finder", onclick: () => act("reveal", shown(), said) }),
       el("button", { class: "pill", type: "button", text: "Ouvrir", onclick: () => act("open", shown(), said) }),
       state.rawApp && /\.(nef|dng)$/i.test(photo.name) && el("button", { class: "pill", type: "button",
-        text: "Ouvrir avec " + state.rawApp, onclick: () => act("open", shown(), said, true) })),
+        text: "Ouvrir avec " + state.rawApp, onclick: () => act("open", shown(), said, true) }),
+      state.panoCan && photo.seq_n > 1 && !photo.bird && el("button", { class: "pill", type: "button",
+        text: "Assembler le panorama",
+        title: "Si les vues de la séquence se suivent comme celles d'un panorama, les assembler en une image, écrite à côté d'elles",
+        onclick: async (event) => {
+          event.currentTarget.disabled = true;
+          said.textContent = "Assemblage du panorama…";
+          const reply = await post("/api/pano", { name: photo.name });
+          said.textContent = reply.error || `Panorama assemblé : ${reply.photo.name}. Cherchez « panorama » pour le voir.`;
+          event.target.disabled = false;
+        } })),
       said);
   } else {
     out.push(el("p", { class: "mono", text: "Hors d'atteinte pour l'instant : le disque d'archive n'est pas monté." }));
@@ -650,6 +660,7 @@ async function start() {
   state.claude = facets.claude;
   state.rawApp = facets.raw_app;
   state.facesCan = facets.faces;
+  state.panoCan = facets.pano;
   for (const [name] of facets.people || []) $("personList").append(el("option", { value: name }));
   $("viewerImg").addEventListener("load", drawFaces);
   window.addEventListener("resize", drawFaces);
