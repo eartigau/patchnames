@@ -179,13 +179,16 @@ def _focus_crop(img, row):
     return img.crop((int(cx - half_w), int(cy - half_h), int(cx + half_w), int(cy + half_h)))
 
 
-def _pictures(names, tmpdir, index, rows):
+def _pictures(names, tmpdir, index, rows, keep=None):
     """the middle frame at 1400 px, a crop around its focus point at full
-    resolution, and the contact sheets of a sequence"""
+    resolution, and the contact sheets of a sequence; keep(name, image, big),
+    if given, is called with every image loaded on the way"""
     from PIL import Image, ImageDraw
     paths = []
     middle = names[len(names) // 2]
     full = _image(middle, big=True)
+    if keep:
+        keep(middle, full, True)
     path = os.path.join(tmpdir, f'seq{index:03d}_focus.jpg')
     _focus_crop(full, rows.get(middle, {})).save(path, quality=88)
     rep = full.copy()
@@ -206,6 +209,8 @@ def _pictures(names, tmpdir, index, rows):
         draw = ImageDraw.Draw(sheet)
         for k, name in enumerate(chunk):
             img = _image(name, big=False)
+            if keep:
+                keep(name, img, False)
             img.thumbnail((231, 153))
             x, y = (k % 6) * 233, (k // 6) * 155
             sheet.paste(img, (x, y))
@@ -247,10 +252,12 @@ def _tags(answer):
     """the exiftool arguments of an answer (lists set, not appended)"""
     species = answer.get('especes') or []
     habitat = answer.get('habitat') or []
+    # the main subject of the photo, when the answer names it (patchdoc)
+    topic = (answer.get('sujet') or '').strip()
     words = []
     for sp in species:
         words += [sp.get('francais', ''), sp.get('latin', '')]
-    words += habitat + list(answer.get('autres_mots_cles') or [])
+    words += habitat + [topic] + list(answer.get('autres_mots_cles') or [])
     if species and answer.get('certitude', 'sûre') != 'sûre':
         words.append(UNSURE)
     words = [w for w in dict.fromkeys(w.strip() for w in words) if w]
@@ -261,6 +268,8 @@ def _tags(answer):
         if sp.get('latin'):
             hier.append(f'Espèce latine|{sp["latin"]}')
     hier += [f'Habitat|{h}' for h in habitat if h]
+    if topic:
+        hier.append(f'Sujet|{topic}')
     title, desc = answer['titre'], answer['description']
     args = ['-charset', 'iptc=UTF8', '-codedcharacterset=utf8',
             f'-XMP-dc:Title={title}', f'-XMP-dc:Description={desc}',

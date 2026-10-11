@@ -5,15 +5,16 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "patchnames"
 version = "0.1.0"
-description = "Rename and archive photo/video files using EXIF metadata"
+description = "Rename, describe and archive photo/video files using EXIF metadata, Claude and eBird"
 requires-python = ">=3.8"
 dependencies = ["pillow"]
 
 [project.scripts]
 patchnames = "patchnames.cli:main"
+patchdoc = "patchnames.doc:main"
 
 [tool.setuptools.packages.find]
 include = ["patchnames*"]
 
 [tool.setuptools.package-data]
-patchnames = ["*.md"]
+patchnames = ["*.md", "*.json", "gui/*"]

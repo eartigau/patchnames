@@ -236,9 +236,14 @@ def patchdate(search_string):
                     os.remove(backup)
 
 
-def patchnames(extensions=None):
-    """Rename and archive all photo/video files in the current directory."""
+def patchnames(extensions=None, skip=()):
+    """Rename and archive all photo/video files in the current directory.
+
+    skip: file names to leave alone.
+    Returns {name as found: path where the file now is}.
+    """
     cfg = _cfg_get()
+    moved = {}
     if extensions is None:
         extensions = cfg['extensions']
 
@@ -254,10 +259,11 @@ def patchnames(extensions=None):
     patterns = list(seen.keys()) + [e.upper() for e in seen]
 
     for pattern in patterns:
-        fics = [f for f in glob.glob(pattern) if os.path.isfile(f)]
+        fics = [f for f in glob.glob(pattern) if os.path.isfile(f) and f not in skip]
         if not fics:
             continue
 
+        found = {}
         for i, fic in enumerate(fics):
             clean = (
                 fic.replace(' ', '')
@@ -268,6 +274,7 @@ def patchnames(extensions=None):
             if fic != clean:
                 os.rename(fic, clean)
                 fics[i] = clean
+            found[clean] = fic
 
         fics.sort()
         print(f'\nProcessing pattern: {pattern}  ({len(fics)} files)')
@@ -294,8 +301,10 @@ def patchnames(extensions=None):
                         print(f'    deleted duplicate: {fic}')
                     else:
                         print(f'    {target} already exists with different size -- skipped.')
+                        moved[found[fic]] = os.path.abspath(fic)
                 else:
                     print('    filename already canonical.')
+                moved.setdefault(found[fic], os.path.abspath(target))
 
                 if os.path.isdir(photo_archive_root):
                     year_month = '20' + target[0:2] + '_' + target[2:4]
@@ -303,9 +312,13 @@ def patchnames(extensions=None):
                     os.makedirs(outdir, exist_ok=True)
                     os.system(f'mv -f "{target}" "{outdir}/"')
                     print(f'    archived -> {outdir}/')
+                    if moved[found[fic]] == os.path.abspath(target):
+                        moved[found[fic]] = os.path.join(outdir, target)
                 else:
                     print('    external drive not connected -- file kept locally.')
 
             except Exception as exc:
                 print(f'    ERROR processing {fic}: {exc}')
                 time.sleep(0.05)
+
+    return moved

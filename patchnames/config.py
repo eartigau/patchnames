@@ -1,7 +1,10 @@
 import json
+import os
 from pathlib import Path
 
-CONFIG_PATH = Path.home() / '.config' / 'patchnames' / 'config.json'
+# PATCHNAMES_CONFIG: another config file (to try things away from the archive)
+CONFIG_PATH = Path(os.environ.get('PATCHNAMES_CONFIG')
+                   or Path.home() / '.config' / 'patchnames' / 'config.json')
 
 DEFAULTS = {
     'exif_cache_dir': str(Path.home() / 'photo' / 'exifdata'),
@@ -23,6 +26,19 @@ DEFAULTS = {
     'keywords_gap': 30,
     'keywords_model': None,
     'keywords_auto': False,
+    # patchdoc: every photo described by Claude, the birds identified with the
+    #   eBird checklists as a prior (doc.py), and the search page (gui.py)
+    'bird_focal_min': 200,      # mm: a photo taken beyond is looked at as a bird photo
+    'doc_jobs': 3,              # Claude calls at the same time
+    'index_dir': str(Path.home() / 'photo' / 'patchdoc'),   # the index, thumbnails, previews
+    'gui_port': 8765,
+    # the eBird data (ebird.py)
+    'ebird_dir': str(Path.home() / '.config' / 'patchnames' / 'ebird'),
+    'ebird_search': ['~/Downloads/ebird_*.zip', '~/Downloads/MyEBirdData*.csv'],
+    'ebird_refresh': True,      # ask eBird for a new export when photos are newer than the data
+    'imap_host': '127.0.0.1',   # Proton Mail Bridge
+    'imap_port': 1143,
+    'imap_folders': ['INBOX', 'All Mail'],
 }
 
 

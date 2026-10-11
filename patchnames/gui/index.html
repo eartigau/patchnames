@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>patchdoc &middot; photo search</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/theme.css">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <div class="bg-orb orb-a"></div>
+  <div class="bg-orb orb-b"></div>
+
+  <div class="site-banner">
+    <div class="site-banner-inner">
+      <div class="site-banner-text">
+        <h2>patchdoc</h2>
+        <p>Photos described by Claude &middot; birds located with eBird checklists</p>
+      </div>
+      <a href="https://eartigau.github.io/" class="home-link">&larr; Home</a>
+    </div>
+  </div>
+
+  <header class="hero">
+    <p class="eyebrow">Photo archive</p>
+    <h1>Find a photo</h1>
+    <p class="subtitle">Search by species, place, date, subject, or any word of a description.
+      Each tile is a sequence of shots; click it for the full description, its eBird
+      checklist and its files.</p>
+    <p class="subtitle counts" id="counts"></p>
+  </header>
+
+  <main class="layout">
+    <section class="card span-3">
+      <form id="filters" autocomplete="off">
+        <input id="q" class="field big" type="search"
+               placeholder="Search: a species, a place, &laquo; en vol &raquo;, &laquo; juv&eacute;nile &raquo;, a file name&hellip;">
+        <div class="fields">
+          <label>Species
+            <input id="species" class="field" list="speciesList" placeholder="any">
+            <datalist id="speciesList"></datalist>
+          </label>
+          <label>Place
+            <input id="place" class="field" list="placeList" placeholder="any">
+            <datalist id="placeList"></datalist>
+          </label>
+          <label>Region
+            <select id="region" class="field"><option value="">any</option></select>
+          </label>
+          <label>Year
+            <select id="year" class="field"><option value="">any</option></select>
+          </label>
+          <label>From
+            <input id="since" class="field" type="date">
+          </label>
+          <label>To
+            <input id="until" class="field" type="date">
+          </label>
+          <label>Subject
+            <select id="topic" class="field"><option value="">any</option></select>
+          </label>
+          <label>Lens
+            <select id="kind" class="field">
+              <option value="">any</option>
+              <option value="birds">telephoto (bird photos)</option>
+              <option value="others">others</option>
+            </select>
+          </label>
+          <label>Show
+            <select id="flag" class="field">
+              <option value="">everything</option>
+              <option value="described">described</option>
+              <option value="undescribed">not described yet</option>
+              <option value="unsure">identification to confirm</option>
+              <option value="offlist">species not on the eBird checklist</option>
+              <option value="nolist">bird photos without a checklist</option>
+            </select>
+          </label>
+          <label>Sort
+            <select id="sort" class="field">
+              <option value="new">newest first</option>
+              <option value="old">oldest first</option>
+              <option value="title">by title</option>
+            </select>
+          </label>
+        </div>
+        <div class="options">
+          <label class="check"><input id="listed" type="checkbox" checked>
+            With a species, also show the photos taken during an eBird checklist that lists it
+            (not identified on the photo)</label>
+          <span id="checklistChip" class="chip active" hidden></span>
+          <button id="reset" class="pill" type="button">Reset</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="card span-3" id="results">
+      <div class="stats-grid four" id="stats"></div>
+      <div class="gallery-grid" id="grid"></div>
+      <p class="hint" id="status"></p>
+      <div id="more"></div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <p>
+      <a href="https://github.com/eartigau/patchnames" target="_blank" rel="noopener">Source on GitHub</a>
+      &middot;
+      <a href="https://eartigau.github.io/" target="_blank" rel="noopener">More tools</a>
+    </p>
+  </footer>
+
+  <div id="viewer" class="lightbox viewer" hidden>
+    <button id="viewerClose" class="lightbox-close" aria-label="Close" type="button">&times;</button>
+    <button id="viewerPrev" class="viewer-nav prev" aria-label="Previous" type="button">&lsaquo;</button>
+    <button id="viewerNext" class="viewer-nav next" aria-label="Next" type="button">&rsaquo;</button>
+    <div class="viewer-body">
+      <div class="viewer-stage">
+        <img id="viewerImg" src="" alt="">
+        <div id="viewerStrip" class="viewer-strip"></div>
+      </div>
+      <aside id="viewerInfo" class="viewer-info"></aside>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
