@@ -232,7 +232,11 @@ async function work(photo, what) {
         say(job.files ? `Écriture dans les fichiers : ${job.written} sur ${job.files}…` : "Écriture dans les fichiers…", true);
       } else if (job.state === "done") {
         update(job.photo);
-        return say("Les fichiers de la séquence sont à jour.", false);
+        // (a server started before this could write only knows the index)
+        return say(job.photo.written && job.photo.written !== "pending"
+          ? "Les fichiers de la séquence sont à jour."
+          : "La base est à jour, mais pas les fichiers : ce serveur date d'avant la mise à jour. "
+            + "Arrêtez-le (Ctrl-C), relancez `patchdoc gui`, puis « Écrire dans les fichiers ».", false);
       }
     }
     say("L'écriture dure plus de deux heures ; elle continue sans cette page.", false);
