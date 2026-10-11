@@ -186,7 +186,7 @@ function refresh(index) {
   if ($("grid").children[index]) $("grid").children[index].replaceWith(tile(photo, index));
   if (state.current === index) {
     $("viewerInfo").replaceChildren(...info(photo));
-    show(photo.name);
+    showPeople();
   }
 }
 
@@ -304,6 +304,7 @@ function showChecklistChip() {
 function show(name) {
   state.shown = name;       // the frame on screen: the one the file buttons act on
   $("viewerImg").src = image("preview", name);
+  loadFaces();
   for (const img of $("viewerStrip").children) img.classList.toggle("on", img.dataset.name === name);
 }
 
@@ -319,6 +320,7 @@ async function openViewer(index) {
   show(photo.name);
   $("viewerInfo").replaceChildren(...info(photo));
   $("viewerInfo").scrollTop = 0;
+  showPeople();
   if (photo.seq_n > 1) {
     const frames = await (await fetch("/api/sequence?seq=" + encodeURIComponent(photo.seq))).json();
     if (state.current !== index || !Array.isArray(frames)) return;
@@ -363,6 +365,75 @@ async function act(what, name, box, app) {
   }
 }
 
+/* ── Faces: a square on each, a name given once, found again elsewhere ── */
+
+const facesOn = () => { try { return localStorage.getItem("patchdoc.visages") === "oui"; } catch (err) { return false; } };
+
+// the squares, placed on the picture as it is drawn inside its element
+function drawFaces() {
+  const box = $("viewerFaces"), img = $("viewerImg");
+  box.replaceChildren();
+  if (!facesOn() || !state.faceList || !img.naturalWidth) return;
+  const frame = img.getBoundingClientRect(), stage = box.getBoundingClientRect();
+  const scale = Math.min(frame.width / img.naturalWidth, frame.height / img.naturalHeight);
+  const width = img.naturalWidth * scale, height = img.naturalHeight * scale;
+  const left = frame.left - stage.left + (frame.width - width) / 2;
+  const top = frame.top - stage.top + (frame.height - height) / 2;
+  state.faceList.forEach((face, k) => box.append(el("div", {
+    class: "face" + (face.sure === 1 ? " sure" : face.person ? " guess" : ""),
+    style: `left:${left + face.x * width}px;top:${top + face.y * height}px;width:${face.w * width}px;height:${face.h * height}px`,
+  }, el("span", { text: `${k + 1}${face.person ? " " + face.person + (face.sure === 1 ? "" : " ?") : ""}` }))));
+}
+
+// the faces of the frame on screen, looked for by the server if nobody did
+async function loadFaces() {
+  state.faceList = null;
+  state.faceNote = "";
+  drawFaces();
+  if (!facesOn() || !state.shown) return;
+  const name = state.shown;
+  state.faceNote = "Recherche des visages…";
+  showPeople();
+  const reply = await (await fetch("/api/faces?name=" + encodeURIComponent(name))).json();
+  if (state.shown !== name) return;
+  state.faceList = reply.faces || [];
+  state.faceNote = reply.error || (state.faceList.length ? "" : "Aucun visage trouvé sur cette vue.");
+  drawFaces();
+  showPeople();
+}
+
+// who a face is: a name given, a proposal confirmed, or (empty) taken off
+async function nameFace(face, person, born) {
+  const reply = await post("/api/face", { id: face.id, person, born });
+  if (reply.error) { state.faceNote = reply.error; return showPeople(); }
+  state.faceList = reply.faces;
+  $("personList").replaceChildren(...reply.people.map(([name]) => el("option", { value: name })));
+  const index = state.current;
+  if (index >= 0 && reply.photo && state.items[index].seq === reply.photo.seq) Object.assign(state.items[index], reply.photo);
+  refresh(index);
+  drawFaces();
+}
+
+// the rows of the faces in the panel: a number, a name to give, the year of birth
+function showPeople() {
+  const box = $("peopleRows");
+  if (!box) return;
+  box.replaceChildren(state.faceNote && el("p", { class: "mono", text: state.faceNote }),
+    ...(state.faceList || []).map((face, k) => {
+      const who = el("input", { class: "field", list: "personList", value: face.person || "",
+                                placeholder: "qui est-ce ?", "aria-label": "Nom du visage " + (k + 1) });
+      const born = el("input", { class: "field born", inputmode: "numeric", maxlength: "4", value: face.born || "",
+                                 placeholder: "né en", title: "Année de naissance : la reconnaissance en tient compte (un enfant change vite, et personne n'est cherché avant sa naissance)" });
+      const give = () => nameFace(face, who.value, born.value);
+      for (const input of [who, born]) input.addEventListener("keydown", (event) => { if (event.key === "Enter") give(); });
+      return el("div", { class: "who" }, el("span", { class: "n", text: String(k + 1) }), who, born,
+        el("button", { class: "pill", type: "button", text: face.person && face.sure !== 1 ? "Oui" : "Nommer",
+                       title: face.person && face.sure !== 1 ? "Confirmer le nom proposé" : "Donner ce nom à ce visage", onclick: give }),
+        face.person && el("button", { class: "pill", type: "button", text: face.sure === 1 ? "Retirer" : "Non",
+                       title: face.sure === 1 ? "Retirer ce nom" : "Ce n'est pas cette personne", onclick: () => nameFace(face, "", "") }));
+    }));
+}
+
 // the buttons of the viewer: Claude describes the sequence where its files
 // are ("describe"), and what the index says of it is written into its files
 // ("write" does only that). photo.job is what is said of the work under way.
@@ -376,6 +447,7 @@ async function work(photo, what) {
   const update = (fresh) => {
     Object.assign(photo, fresh);
     refresh(index);
+    if (state.current === index) show(state.shown || photo.name);    // its preview may be new
     batchButton();
   };
   say(what === "describe" ? "Claude regarde la séquence…" : "Écriture dans les fichiers…", true);
@@ -470,6 +542,28 @@ function info(photo) {
     out.push(el("p", { class: "mono", text: "Pour demander à Claude d'identifier la séquence ou écrire dans les fichiers, montez le disque d'archive." }));
   }
 
+  // the people: names given by the photographer, names proposed, and the faces to name
+  const people = split(photo.people), guessed = split(photo.guessed);
+  if (state.facesCan || people.length || guessed.length) {
+    out.push(el("h3", { text: "Personnes" }));
+    if (people.length || guessed.length) {
+      out.push(el("div", { class: "chips" },
+        people.map((name) => el("span", { class: "chip", text: name, title: "Toutes les photos de cette personne", onclick: () => setFilter({ person: name }) })),
+        guessed.map((name) => el("span", { class: "chip", text: name + " ?", title: "Nom proposé d'après les visages déjà nommés ; à confirmer", onclick: () => setFilter({ person: name }) }))));
+    }
+    if (state.facesCan) {
+      out.push(el("div", { class: "actions" }, el("button", { class: "pill", type: "button",
+        text: facesOn() ? "Masquer les visages" : "Montrer les visages",
+        title: "Un carré sur chaque visage de la vue affichée, pour dire qui c'est ; la reconnaissance se fait sur cette machine",
+        onclick: () => {
+          try { localStorage.setItem("patchdoc.visages", facesOn() ? "non" : "oui"); } catch (err) { /* private mode */ }
+          $("viewerInfo").replaceChildren(...info(photo));
+          loadFaces();
+        } })));
+      if (facesOn()) out.push(el("div", { id: "peopleRows" }));
+    }
+  }
+
   const species = split(photo.species), latin = split(photo.latin);
   if (species.length) {
     out.push(el("h3", { text: "Espèces" }), el("div", { class: "chips" }, species.map((name, k) =>
@@ -555,7 +649,10 @@ async function start() {
   // (a server started before an update of patchdoc says less: relaunch it)
   state.claude = facets.claude;
   state.rawApp = facets.raw_app;
+  state.facesCan = facets.faces;
   for (const [name] of facets.people || []) $("personList").append(el("option", { value: name }));
+  $("viewerImg").addEventListener("load", drawFaces);
+  window.addEventListener("resize", drawFaces);
   const store = facets.thumbs && facets.thumbs.total
     ? ` · vignettes : ${number(facets.thumbs.have)} sur ${number(facets.thumbs.total)}`
       + (facets.thumbs.filling ? " (les autres se font en arrière-plan)" : "")

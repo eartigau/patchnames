@@ -17,6 +17,8 @@ The page (gui/index.html, app.js) asks for:
     /api/batch               (POST) the same for a list of sequences, in the
                              background; (GET) how that is going
     /api/batch/stop          (POST) drop the sequences still waiting
+    /api/faces?name=         the faces of a photo, looked for if nobody did
+    /api/face                (POST) who a face is
 
 Thumbnails and previews come from the index folder, a local store that makes
 browsing fast and needs no drive; one that is missing is made from the photo
@@ -108,6 +110,29 @@ def _raw_app():
                                 for place in places) else None
 
 
+def _faces(name):
+    """the faces of a photo for the page, looked for now if nobody did"""
+    from . import faces
+    if not faces.available():
+        return {'error': "OpenCV n'est pas installé ici : pas de visages (pip install "
+                         'opencv-python).'}
+    db = photoindex.connect()
+    try:
+        row = db.execute('SELECT path, taken, faces FROM photos WHERE name = ?', (name,)).fetchone()
+        if row is None:
+            return {'error': 'photo inconnue'}
+        if row['faces'] is None:
+            path = _image_file(name, 'preview')
+            if not path or not os.path.isfile(photoindex.preview_path(name)):
+                return {'error': "La photo est hors d'atteinte : montez le disque d'archive "
+                                 'pour y chercher les visages.'}
+            from PIL import Image
+            faces.scan(db, name, Image.open(path), row['taken'])
+        return {'faces': faces.of_photo(db, name)}
+    finally:
+        db.close()
+
+
 def _archive():
     """where the archive is expected, and where it is mounted now (None if
     it is not)"""
@@ -156,9 +181,23 @@ def _fill(stop):
         if not stop.is_set() and _image_file(name, 'thumb'):
             _store['have'] += 1
 
+    def faces_of(name):
+        while not stop.is_set() and not _archive()['mounted']:
+            stop.wait(60)
+        if not stop.is_set():
+            _faces(name)
+
     with ThreadPoolExecutor(max_workers=2) as pool:
         list(pool.map(make, todo))
-    _store['filling'] = False
+        _store['filling'] = False
+        # then the faces of the photos that are not of birds, the newest first
+        if _config_module.load().get('gui_scan_faces', True):
+            db = _db()
+            unseen = [row['name'] for row in db.execute(
+                'SELECT name FROM photos WHERE rep = 1 AND faces IS NULL AND COALESCE(bird, 0) = 0 '
+                "AND COALESCE(topic, '') != 'oiseau' ORDER BY COALESCE(local, taken) DESC")]
+            db.close()
+            list(pool.map(faces_of, unseen))
 
 
 def _work(seq, ask):
@@ -265,18 +304,22 @@ def _batch_status(since=0):
 
 
 def _resume(stop):
-    """finish writing into their files the sequences a stopped server left
-    waiting, once the archive is there"""
+    """write into their files what the index learned of sequences without
+    writing it yet: those a stopped server left waiting, and those whose
+    people were just named; looks again every half minute, when the archive
+    is there"""
     from .doc import pending_writes, write_sequence
-    for seq in pending_writes():
-        while not stop.is_set() and not _archive()['mounted']:
-            stop.wait(60)
-        if stop.is_set():
-            return
-        try:
-            write_sequence(seq)
-        except Exception:
-            pass
+    while not stop.is_set():
+        busy = {seq for seq, job in list(_jobs.items()) if job.get('state') in ('running', 'writing')}
+        for seq in pending_writes() if _archive()['mounted'] else []:
+            if stop.is_set():
+                return
+            if seq not in busy:
+                try:
+                    write_sequence(seq)
+                except Exception:
+                    pass
+        stop.wait(30)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -341,6 +384,7 @@ class Handler(BaseHTTPRequestHandler):
                 each = _cost_guess(cfg.get('keywords_model'), cfg.get('doc_effort'))[0]
                 facets = dict(photoindex.facets(db), index=photoindex.index_dir(),
                               archive=_archive(), thumbs=dict(_store), raw_app=_raw_app(),
+                              faces=__import__('patchnames.faces', fromlist=['x']).available(),
                               claude={'each': each, 'spent': _spent['total'],
                                       'budget': float(cfg.get('doc_budget') or 0)})
                 db.close()
@@ -374,6 +418,8 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(200, _jobs.get(args.get('id', ''), {'state': 'unknown'}))
             elif url.path == '/api/batch':
                 self._send(200, _batch_status(int(args.get('since') or 0)))
+            elif url.path == '/api/faces':
+                self._send(200, _faces(os.path.basename(args.get('name', ''))))
             else:
                 self._send(404, {'error': 'introuvable'})
         except (BrokenPipeError, ConnectionResetError):
@@ -387,13 +433,28 @@ class Handler(BaseHTTPRequestHandler):
         # a header no other site can send without asking first, and never gets
         if self.headers.get('X-Patchdoc') != '1' or self.path not in (
                 '/api/reveal', '/api/open', '/api/describe', '/api/write', '/api/batch',
-                '/api/batch/stop'):
+                '/api/batch/stop', '/api/face'):
             self._send(403, {'error': 'refusé'})
             return
         try:
             body = json.loads(self.rfile.read(int(self.headers.get('Content-Length') or 0)))
             if self.path == '/api/batch':
                 self._send(200, _batch_add(list(body.get('names') or [])))
+                return
+            if self.path == '/api/face':
+                from . import faces
+                db = photoindex.connect()
+                face = db.execute('SELECT photo FROM faces WHERE id = ?', (body.get('id'),)).fetchone()
+                if face is None:
+                    self._send(404, {'error': 'visage inconnu'})
+                else:
+                    faces.name(db, body['id'], str(body.get('person') or ''), body.get('born'))
+                    row = db.execute('SELECT * FROM photos WHERE seq = (SELECT seq FROM photos '
+                                     'WHERE name = ?) AND rep = 1', (face['photo'],)).fetchone()
+                    self._send(200, {'faces': faces.of_photo(db, face['photo']),
+                                     'photo': _public(dict(row)) if row else None,
+                                     'people': photoindex.facets(db)['people']})
+                db.close()
                 return
             if self.path == '/api/batch/stop':
                 with _lock:

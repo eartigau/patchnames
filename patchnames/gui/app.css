@@ -369,6 +369,75 @@
   border-radius: 10px;
 }
 
+/* the faces of the photo on screen: a square each, numbered, with the name
+   given (green) or proposed (amber, dashed) */
+.viewer-stage {
+  position: relative;
+}
+
+.viewer-faces {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.face {
+  position: absolute;
+  border: 2px solid var(--accent);
+  border-radius: 6px;
+  box-shadow: 0 0 0 1px rgba(4, 8, 16, 0.6);
+}
+
+.face.sure {
+  border-color: #6ce2ad;
+}
+
+.face.guess {
+  border-color: #ffc46b;
+  border-style: dashed;
+}
+
+.face span {
+  position: absolute;
+  left: -2px;
+  bottom: 100%;
+  padding: 1px 7px;
+  border-radius: 6px 6px 6px 0;
+  background: rgba(4, 8, 16, 0.85);
+  color: var(--text);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
+.who {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.who .n {
+  width: 1.4em;
+  font-family: "IBM Plex Mono", monospace;
+  color: var(--muted);
+}
+
+.who .field {
+  padding: 5px 8px;
+  font-size: 0.86rem;
+}
+
+.who .field {
+  flex: 1;
+  min-width: 0;
+}
+
+.who .born {
+  width: 4.6em;
+  flex: none;
+}
+
 .viewer-strip {
   display: flex;
   gap: 6px;

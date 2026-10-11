@@ -46,7 +46,8 @@ COLUMNS = ('name', 'path', 'stem', 'ext',
            'certainty',
            'eye', 'clear', 'level',    # a bird photo, 1 to 5: the focus on the eye, how
                                        #   clear of branches the bird is, how close to eye level
-           'people',           # the people named in the photo
+           'people',           # the people the photographer named in the photo
+           'guessed',          # those faces.py proposes, not confirmed
            'faces',            # how many faces were found in it; NULL if nobody looked
            'note',             # what Claude says of the photo against the checklist
            'checklist',        # eBird submission ID
@@ -87,14 +88,21 @@ CREATE TABLE IF NOT EXISTS observations {TABLES['observations']};
 CREATE INDEX IF NOT EXISTS observations_sid ON observations (sid);
 CREATE TABLE IF NOT EXISTS meta {TABLES['meta']};
 CREATE TABLE IF NOT EXISTS geocode (cell TEXT PRIMARY KEY, answer TEXT);
+CREATE TABLE IF NOT EXISTS people (id INTEGER PRIMARY KEY, name TEXT UNIQUE, born TEXT);
+CREATE TABLE IF NOT EXISTS faces (id INTEGER PRIMARY KEY, photo TEXT, x REAL, y REAL, w REAL,
+    h REAL, score REAL, vector BLOB, taken TEXT, person INTEGER, sure INTEGER DEFAULT 0,
+    likeness REAL, banned TEXT);
+CREATE INDEX IF NOT EXISTS faces_photo ON faces (photo);
 """
 
 #: the kinds of tags, and the column of a photo each comes from
 TAGS = (('species', 'species'), ('latin', 'latin'), ('habitat', 'habitat'),
-        ('keyword', 'keywords'), ('topic', 'topic'), ('person', 'people'))
+        ('keyword', 'keywords'), ('topic', 'topic'), ('person', 'people'), ('maybe', 'guessed'))
 #: the sections of the search page: bird photos, photos with people, the rest
-BIRDS = "(p.bird = 1 OR p.topic = 'oiseau')"
-FAMILY = "(p.topic = 'personnes' OR COALESCE(p.people, '') != '' OR COALESCE(p.faces, 0) > 0)"
+# (a column that is NULL would make "NOT ..." NULL, and lose the row)
+BIRDS = "(COALESCE(p.bird, 0) = 1 OR COALESCE(p.topic, '') = 'oiseau')"
+FAMILY = ("(COALESCE(p.topic, '') = 'personnes' OR COALESCE(p.people, '') != '' "
+          "OR COALESCE(p.guessed, '') != '' OR COALESCE(p.faces, 0) > 0)")
 SEP = '; '
 
 
@@ -326,7 +334,7 @@ def _derive(db, names):
                                (name, kind, value.strip(), fold(value)))
         text = ' '.join(str(row[key] or '') for key in (
             'title', 'topic', 'description', 'species', 'latin', 'habitat', 'keywords', 'note',
-            'people',
+            'people', 'guessed',
             'location', 'county', 'state', 'checklist', 'camera', 'lens', 'name'))
         db.execute('INSERT INTO search (rowid, text) VALUES (?, ?)',
                    (row['id'], text + ' ' + country_name(row['country'] or '')))
@@ -380,7 +388,8 @@ def _where(q='', species='', listed=False, place='', region='', year='', since='
     elif section == 'autre':
         where.append(f'NOT {FAMILY} AND NOT {BIRDS}')
     if person:
-        where.append("p.name IN (SELECT name FROM tags WHERE kind = 'person' AND norm LIKE ?)")
+        where.append("p.name IN (SELECT name FROM tags WHERE kind IN ('person', 'maybe') "
+                     'AND norm LIKE ?)')
         args.append(f'%{fold(person)}%')
     for column, least in (('eye', eye), ('clear', clear), ('level', level)):
         if str(least).isdigit():
@@ -490,8 +499,9 @@ def facets(db):
                        'WHERE rep = 1 AND y IS NOT NULL GROUP BY y ORDER BY y DESC'),
         'topics': count("SELECT topic, COUNT(*) FROM photos WHERE rep = 1 AND topic != '' "
                         'GROUP BY topic ORDER BY COUNT(*) DESC'),
-        'people': count("SELECT value, COUNT(*) FROM tags WHERE kind = 'person' "
-                        'GROUP BY value ORDER BY value COLLATE NOCASE'),
+        'people': count('SELECT p.name, p.born, COUNT(f.id) FROM people p '
+                        'LEFT JOIN faces f ON f.person = p.id GROUP BY p.id '
+                        'ORDER BY p.name COLLATE NOCASE'),
         'total': db.execute('SELECT COUNT(*) FROM photos').fetchone()[0],
         'described': db.execute('SELECT COUNT(*) FROM photos WHERE described IS NOT NULL').fetchone()[0],
         'ebird': (db.execute("SELECT value FROM meta WHERE key = 'ebird_asof'").fetchone() or [None])[0],

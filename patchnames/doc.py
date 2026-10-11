@@ -61,6 +61,7 @@ from datetime import datetime, timedelta
 
 from . import config as _config_module
 from . import ebird as _ebird
+from . import faces
 from . import geo
 from . import photoindex
 from .keywords import (IMAGE_PATTERNS, UNSURE, _groups, _image, _pictures, _tags, _when,
@@ -387,6 +388,7 @@ def file_tags(answer, kept, checklist, position=True):
     keywords` writes it; None for a sequence it did not describe), the place,
     its latitude and longitude, and the eBird checklist as the event"""
     args = []
+    people = [name for name in (kept.get('people') or '').split(photoindex.SEP) if name]
     if answer:
         answer = dict(answer)
         if kept['note']:
@@ -398,13 +400,20 @@ def file_tags(answer, kept, checklist, position=True):
         #   place in the Lightroom hierarchy
         marks = [(label, stem, kept.get(column)) for column, _, label, stem in NOTES
                  if kept.get(column)]
-        people = [name for name in (kept.get('people') or '').split(photoindex.SEP) if name]
         answer['autres_mots_cles'] = words + [f'{stem} {n}/5' for _, stem, n in marks] + people
         answer['hierarchie'] = ([f'Qualité|{label}|{n}' for label, _, n in marks]
                                 + [f'Personne|{name}' for name in people])
         args += _tags(answer)
+    else:
+        # no description to write: the people are added to the keywords the
+        #   file has (taken off first, not to be there twice)
+        for name in people:
+            for tag, value in (('XMP-dc:Subject', name), ('IPTC:Keywords', name),
+                               ('XMP-lr:HierarchicalSubject', f'Personne|{name}')):
+                args += [f'-{tag}-={value}', f'-{tag}+={value}']
+    if 'people' in kept:
         args += [f'-XMP-iptcExt:PersonInImage={name}' for name in people] or (
-            ['-XMP-iptcExt:PersonInImage='] if 'people' in kept else [])
+            ['-XMP-iptcExt:PersonInImage='])
     if checklist:
         args += place_tags(checklist, position)
     return args
@@ -583,6 +592,14 @@ def prompt_for(seq, images, rows, instructions):
         kind = BIRD.format(focal=f'{focal:.0f}')
     else:
         kind = OTHER.format(focal=f' ({focal:.0f} mm)' if focal else '')
+    if seq.get('people') or seq.get('guessed'):
+        # the names come from faces.py, on this machine; Claude does not
+        #   recognise anybody
+        kind += ("\nPersonnes sur la photo, d'après les visages que le photographe a nommés : "
+                 + (seq.get('people') or 'aucune de sûre')
+                 + (f" ; peut-être aussi : {seq['guessed']}" if seq.get('guessed') else '')
+                 + ". Nomme-les dans le titre ou la description, sans dire qui est qui si rien "
+                   "ne le montre ; ne cherche à reconnaître personne d'autre.")
     return PROMPT.format(
         images='\n'.join(images), views=VIEWS + (SHEETS if len(images) > 2 else '') + '.',
         count=len(names), start=f'{min(times):%Y-%m-%d %H:%M:%S}' if times else '?',
@@ -778,6 +795,14 @@ def document(gap=None, force=False, dry_run=False, index_only=False, backup=True
             if budget and spent['total'] >= budget:
                 raise _OverBudget()
             images = _pictures(seq['names'], tmpdir, index, rows, keep)
+            middle = seq['names'][len(seq['names']) // 2]
+            if (not seq['bird'] and not dry_run and faces.available()
+                    and 'preview' in staged.get(middle, {})):
+                # who is in the picture, from the faces named in the search page
+                from PIL import Image
+                when = _when(rows.get(middle, {}))
+                seq['people'], seq['guessed'] = faces.early(
+                    middle, Image.open(staged[middle]['preview']), when.isoformat(' ') if when else None)
             answer, cost = ask_claude(prompt_for(seq, images, rows, explanations), tmpdir,
                                       model, effort)
             with lock:
@@ -855,6 +880,9 @@ def document(gap=None, force=False, dry_run=False, index_only=False, backup=True
         photoindex.forget(db, [name for name, path in paths.items()
                                if os.path.basename(path) != name])
         photoindex.put(db, records)
+        if faces.available():
+            faces.renamed(db, {name: os.path.basename(paths.get(name, name))
+                               for index in answers for name in seqs[index]['names']})
         if described:
             photoindex.set_meta(db, _cost_key(model, effort), round(cost / len(described), 4))
         db.close()
@@ -1142,6 +1170,12 @@ def describe_sequence(seq_id, model=None, effort=None, sheet=12):
     locate([seq], data, rows, clock=stored['clock_offset'] or 0.0)
     with tempfile.TemporaryDirectory() as tmpdir:
         images = _archive_pictures(frames, full, tmpdir, rows[middle['name']], sheet)
+        if not bird and faces.available():
+            # who is in the picture, from the faces named in the search page
+            from PIL import Image
+            seq['people'], seq['guessed'] = faces.scan(
+                db, middle['name'], Image.open(photoindex.preview_path(middle['name'])),
+                middle['taken'])
         answer, cost = ask_claude(prompt_for(seq, images, rows, explanations), tmpdir,
                                   model or cfg.get('keywords_model'),
                                   effort or cfg.get('doc_effort'))

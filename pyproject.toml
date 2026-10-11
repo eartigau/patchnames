@@ -9,6 +9,10 @@ description = "Rename, describe and archive photo/video files using EXIF metadat
 requires-python = ">=3.8"
 dependencies = ["pillow"]
 
+[project.optional-dependencies]
+# patchdoc finds and compares faces with OpenCV, on this machine
+faces = ["opencv-python", "numpy"]
+
 [project.scripts]
 patchnames = "patchnames.cli:main"
 patchdoc = "patchnames.doc:main"

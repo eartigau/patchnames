@@ -213,6 +213,63 @@ libre, espèce, lieu, région, année et dates, sujet, téléobjectif ou non, et
 ce qui demande un coup d'oeil (identification à confirmer, espèce absente
 de la liste, photos d'oiseaux sans liste).
 
+- **Sections.** Tout, Oiseaux, Famille (les photos où il y a des
+  personnes), Autre : chaque section montre ses filtres. Pour les oiseaux :
+  l'espèce, la liste eBird, et les trois notes que Claude donne de 1 à 5,
+  la netteté de la mise au point sur l'œil, à quel point l'oiseau est
+  dégagé, et à quel point la photo est prise à la hauteur de son œil. Ces
+  notes sont aussi des mots-clés (`œil net 4/5`) et une hiérarchie Lightroom
+  (`Qualité|Œil net|4`). Elles valent pour la vue que Claude a regardée,
+  celle du milieu de la séquence.
+- **Carte des lieux.** Un disque par lieu, avec son nombre de séquences ;
+  les disques se regroupent quand on dézoome et se séparent quand on zoome.
+  Un clic sur un regroupement zoome dessus, un clic sur un lieu le choisit
+  comme filtre. La carte demande Internet (OpenStreetMap).
+- **Fichiers bruts.** « Ouvrir avec Affinity » ouvre le NEF affiché dans
+  l'application de la config `raw_app`.
+
+### Les lieux des photos de cellulaire
+
+Une photo qui porte sa propre position et n'a pas été prise pendant une
+liste eBird reçoit son lieu de cette position : le quartier, la ville, la
+province et le pays sont demandés à Nominatim, le géocodeur
+d'OpenStreetMap, ou viennent de votre propre lieu eBird s'il y en a un à
+moins de 300 m. Seule la position part en ligne, arrondie à environ 100 m ;
+chaque réponse est gardée dans la base. `"geocode": false` dans la config
+pour ne jamais rien demander. La position d'une photo n'est connue de la
+base que si `patchdoc` a traité la photo ou si `patchdoc index --exif` a lu
+son dossier.
+
+### Les personnes
+
+Claude ne reconnaît personne à son visage, avec ou sans photos de référence,
+et `patchdoc` ne le lui demande pas. Les visages sont trouvés et comparés
+sur votre machine, par deux petits modèles d'OpenCV téléchargés une fois
+(`pip install opencv-python`) ; rien ne part en ligne.
+
+- Dans la visionneuse, « Montrer les visages » met un carré sur chaque
+  visage de la vue affichée. Vous donnez un nom à un visage, avec si vous
+  le voulez l'année de naissance de la personne.
+- Ce visage devient un exemple, daté par sa photo. Les autres visages lui
+  sont comparés et le nom est proposé, avec un point d'interrogation, là où
+  la ressemblance est forte ; « Oui » le confirme, « Non » l'écarte pour de
+  bon.
+- **L'âge.** Un exemple ne vaut que pour les années autour de sa photo :
+  un an pour un bébé, deux ou trois pour un enfant, douze pour un adulte
+  (quatre si l'année de naissance n'est pas donnée), et personne n'est
+  cherché avant sa naissance. Un visage reconnu avec une forte ressemblance
+  sert d'exemple à son tour : un nom donné à huit ans remonte ainsi, photo
+  après photo, vers le bébé. Nommer la même personne à quelques âges
+  différents est ce qui l'aide le plus.
+- Les noms confirmés vont dans la base et dans les fichiers
+  (`PersonInImage`, mot-clé, hiérarchie `Personne|Nom`), les noms proposés
+  seulement dans la base. Ils sont donnés à Claude avec la photo, pour
+  qu'il les emploie dans sa description.
+- La page cherche les visages des photos qui ne sont pas d'oiseaux en
+  arrière-plan, après les vignettes (`gui_scan_faces`).
+- Les animaux de la famille se nomment dans `keywords.md` (« le chien blanc
+  s'appelle ... ») : Claude les reconnaît à leur description.
+
 La page n'interroge pas les disques mais une base de données locale :
 `~/photo/patchdoc/photos.sqlite` (config `index_dir`), avec à côté un dépôt
 local de vignettes (`thumbs/`, 360 px) et d'aperçus (`previews/`, 1600 px).
@@ -237,6 +294,11 @@ l'appel à Claude le demandent.
   écriture coupée par l'arrêt du serveur reprend à son prochain démarrage.
   Les fichiers sont récrits sur place, sans copie `<fichier>_original`
   (config `gui_backup` pour en garder une).
+- **Tout ce qui est affiché, en arrière-plan.** Au-dessus des résultats, un
+  bouton fait la même chose pour toutes les séquences affichées qui n'ont
+  pas de description, deux à la fois ; un premier clic dit combien d'appels
+  à Claude le second lancera. Le travail continue si la page est fermée, la
+  page dit où il en est et peut l'arrêter.
 - **« Écrire dans les fichiers ».** Le bouton voisin fait seulement la
   seconde étape, sans appeler Claude : il écrit dans les fichiers ce que la
   base sait déjà de la séquence. Pour une séquence jamais décrite mais prise
