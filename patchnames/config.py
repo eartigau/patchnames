@@ -18,6 +18,9 @@ DEFAULTS = {
     'photo_archive_remotes': {},
     # the copy to use when several are there (the search page sets it)
     'photo_archive_use': None,
+    # exiftool run on the server of an archive mounted with sshfs (remote.py):
+    #   None: when the server has one; False: never; or its path there
+    'remote_exiftool': None,
     'dng_converter': '/Applications/Adobe DNG Converter.app/Contents/MacOS/Adobe DNG Converter',
     'extensions': ['*.NEF', '*.JPG', '*.HEIC', '*.MP4', '*.DNG', '*.MOV', '*.DCM', '*.PSD'],
     'camera_owners': {

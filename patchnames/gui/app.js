@@ -893,7 +893,12 @@ async function start() {
     : (facets.archive.mounted
       ? `disque d'archive : monté (${facets.archive.mounted})`
       : "disque d'archive : non monté. La recherche et les vignettes déjà faites restent disponibles ; "
-        + "ouvrir un fichier, faire une vignette ou appeler Claude demande le disque.") + store;
+        + "ouvrir un fichier, faire une vignette ou appeler Claude demande le disque.") + store
+    // an archive on a server: exiftool is run there when it has one, which spares the trips of the files
+    + (facets.remote || []).filter((server) => server.asked).map((server) => server.tool
+      ? ` · exiftool tourne sur le serveur de l'archive (${server.host})`
+      : ` · le serveur de l'archive (${server.host}) n'a pas exiftool : les fichiers sont lus et récrits à travers le réseau, `
+        + "bien plus lentement (sur le serveur : sudo apt install libimage-exiftool-perl)").join("");
 
   const names = new Set([...facets.species, ...facets.listed].map((row) => row[0]));
   for (const name of [...names].sort((a, b) => a.localeCompare(b, "fr"))) {

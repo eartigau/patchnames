@@ -59,6 +59,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from . import config as _config_module
 from . import photoindex
+from . import remote
 from . import sync
 from .ebird import country_name
 
@@ -537,7 +538,7 @@ class Handler(BaseHTTPRequestHandler):
                               pano=__import__('patchnames.pano', fromlist=['x']).available(),
                               claude={'each': each, 'spent': _spent['total'],
                                       'budget': float(cfg.get('doc_budget') or 0)},
-                              names=_names(db))
+                              names=_names(db), remote=remote.status(ask=False))
                 db.close()
                 facets['regions'] = [(state, country, country_name(country or ''), count)
                                      for state, country, count in facets['regions']]
@@ -714,6 +715,8 @@ def serve(port=None, browser=True, fill=None):
     print(f"  archive : {archive['mounted'] or 'non montée (' + ', '.join(archive['roots']) + ')'}")
     stop = threading.Event()
     threading.Thread(target=_resume, args=(stop,), daemon=True).start()
+    # (whether the server of the archive has exiftool: asked once, ahead of the page)
+    threading.Thread(target=remote.status, daemon=True).start()
     if fill:
         print('  vignettes : celles qui manquent sont faites en arrière-plan (--no-vignettes '
               'pour ne pas le faire)')

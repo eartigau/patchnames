@@ -71,6 +71,7 @@ from . import faces
 from . import geo
 from . import pano
 from . import photoindex
+from . import remote
 from .keywords import (IMAGE_PATTERNS, UNSURE, _groups, _image, _pictures, _tags, _when,
                        instructions_path, write_template)
 
@@ -91,8 +92,8 @@ GPS_MARK = 'eBird'
 TILE_CUT, TILE, TILES, RATED = (1400, 933), (350, 233), 16, 96
 EYE, EYE_SHEET, EYES = 512, 6, 12
 #: frames of a burst read from the archive at the same time: a network drive
-#:  answers slowly, and mostly waits
-READS = 4
+#:  answers slowly, and mostly waits; FRAMES are asked in one exiftool call
+READS, FRAMES = 4, 3
 #: a frame whose eye Claude did not see at full resolution: the note of one it
 #:  saw, less this much each time the sharpness measured on the eye halves
 SOFTER = 1.0
@@ -247,26 +248,35 @@ def read_exif(paths, fast=False):
     notes (no focus point), for a network drive"""
     if not paths:
         return {}
-    cmd = ['exiftool', '-j', '-q'] + (['-fast2'] if fast else []) + FIELDS
-    out = subprocess.run(cmd + list(paths), capture_output=True, text=True).stdout
-    rows = json.loads(out) if out.strip() else []
-    return {row['SourceFile']: row for row in rows}
+    found = remote.rows((['-fast2'] if fast else []) + FIELDS, list(paths))
+    return {row['SourceFile']: row for row in found}
 
 
-def read_frame(path):
-    """the tags of a photo and its picture at full size, (dict, PIL image),
-    in one exiftool call: on a network drive each visit to a file costs
-    more than what it brings back"""
+def read_frames(paths):
+    """the tags of photos and the full-size picture inside each, {path:
+    (dict, the bytes of a JPEG or None)}, in one exiftool call: on a network
+    drive each visit to a file costs more than what it brings back (and the
+    call is made on the server of the archive when it has exiftool)"""
     import base64
+    found = {}
+    for row in remote.rows(['-b', '-JpgFromRaw'] + FIELDS, list(paths)):
+        raw = row.pop('JpgFromRaw', None)
+        try:
+            raw = base64.b64decode(raw[len('base64:'):])
+        except (TypeError, ValueError):
+            raw = None
+        found[row['SourceFile']] = (row, raw)
+    return found
+
+
+def read_frame(path, found=None):
+    """the tags of a photo and its picture at full size, (dict, PIL image);
+    found: what read_frames brought for it, if it was asked with others"""
     import io
     from PIL import Image, ImageOps
-    out = subprocess.run(['exiftool', '-j', '-q', '-b', '-JpgFromRaw'] + FIELDS + [path],
-                         capture_output=True, text=True).stdout
-    row = (json.loads(out) or [{}])[0] if out.strip() else {}
-    raw = row.pop('JpgFromRaw', None)
+    row, raw = found if found else read_frames([path]).get(path, ({}, None))
     try:
-        img = ImageOps.exif_transpose(
-            Image.open(io.BytesIO(base64.b64decode(raw[len('base64:'):])))).convert('RGB')
+        img = ImageOps.exif_transpose(Image.open(io.BytesIO(raw))).convert('RGB')
     except Exception:
         # not a raw file, or one without a full-size picture inside
         img = _image(path, big=True)
@@ -533,11 +543,12 @@ def write_files(args, names, rows, backup=True):
                          ([n for n in names if own_position(rows.get(n, {}))], [])):
         if not group:
             continue
-        cmd = ['exiftool', '-q', '-m'] + ([] if backup else ['-overwrite_original'])
-        res = subprocess.run(cmd + [arg for arg in args if arg not in position] + extra + group,
-                             capture_output=True, text=True)
-        if res.returncode != 0:
-            raise RuntimeError(f'exiftool : {res.stderr.strip()[:300]}')
+        # (on the server of the archive when it has exiftool: the files are
+        #   rewritten where they are, without coming here and going back)
+        code, _, err, _ = remote.run(['-q', '-m'] + ([] if backup else ['-overwrite_original'])
+                                     + [arg for arg in args if arg not in position] + extra, group)
+        if code != 0:
+            raise RuntimeError(f'exiftool : {err.strip()[:300]}')
 
 
 def from_file(row):
@@ -1655,8 +1666,18 @@ def describe_sequence(seq_id, model=None, effort=None, sheet=12, progress=None):
                      if os.path.dirname(frame['path']) == os.path.dirname(middle['path'])
                      else photoindex.resolve(frame['path']) for frame in frames}
 
+            # (asked FRAMES at a time, READS calls at once: each call costs
+            #   a start of exiftool, each frame a trip of its picture)
+            asked = ThreadPoolExecutor(max_workers=READS)
+            parts = {}
+            for start in range(0, len(names), FRAMES):
+                part = [name for name in names[start:start + FRAMES] if where[name]]
+                parts.update(dict.fromkeys(part, asked.submit(read_frames, [where[n] for n in part])))
+            asked.shutdown(wait=False)
+
             def load(name):
-                row, img = read_frame(where[name])
+                # (taken out of what the call brought: its picture is not kept twice)
+                row, img = read_frame(where[name], parts[name].result().pop(where[name], None))
                 exifs[name] = row
                 rows[name] = dict(rows.get(name, {}), **row)
                 return img

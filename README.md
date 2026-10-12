@@ -425,6 +425,16 @@ l'appel à Claude le demandent.
   copie qui n'est pas montée. Une limite : un fichier renommé sur une copie
   (un fichier sans numéro d'appareil change de nom quand ses étiquettes
   sont écrites) reste sous son ancien nom sur l'autre.
+- **exiftool sur le serveur de l'archive.** Une archive montée par sshfs
+  répond lentement : chaque fichier qu'exiftool ouvre est un aller-retour,
+  et écrire une étiquette fait venir le fichier entier puis le renvoie. Si
+  le serveur a exiftool (`sudo apt install libimage-exiftool-perl`),
+  `patchdoc` le lance là-bas par ssh : le serveur lit et récrit son propre
+  disque, et seul ce qui est demandé voyage (les étiquettes, l'image
+  contenue dans un fichier brut). Rien à régler : la page dit sous le titre
+  si c'est le cas, et tout se fait ici comme avant quand le serveur n'a pas
+  exiftool ou ne répond pas. `{"remote_exiftool": false}` l'interdit, ou
+  donne le chemin d'exiftool sur le serveur s'il n'est pas dans le PATH.
 - **SQLite plutôt que DuckDB.** La page lit la base pendant que `patchdoc` y
   écrit, ce qu'un fichier DuckDB n'accepte pas entre deux processus, et sa
   recherche plein texte suit chaque ajout. Les colonnes sont typées : DuckDB
@@ -491,6 +501,7 @@ disque est en réseau.
   "bird_lenses": ["200-500mm", "300mm"],
   "photo_archive_mounts": [],
   "photo_archive_remotes": {},
+  "remote_exiftool": null,
   "bird_focal_min": 200,
   "doc_budget": 10,
   "people": [],

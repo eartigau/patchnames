@@ -153,7 +153,9 @@ def _image(path, big):
         return ImageOps.exif_transpose(Image.open(path)).convert('RGB')
     tags = ('-JpgFromRaw', '-PreviewImage') if big else ('-PreviewImage', '-JpgFromRaw')
     for tag in tags + ('-ThumbnailImage',):
-        raw = subprocess.run(['exiftool', '-b', tag, path], capture_output=True).stdout
+        # (on the server of the archive when it has exiftool: see remote.py)
+        from . import remote
+        raw = remote.run(['-b', tag], [path])[1]
         try:
             return ImageOps.exif_transpose(Image.open(io.BytesIO(raw))).convert('RGB')
         except Exception:
