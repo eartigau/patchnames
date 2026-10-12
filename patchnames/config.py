@@ -48,7 +48,7 @@ DEFAULTS = {
     'bird_focal_min': 200,      # mm: a photo taken beyond is looked at as a bird photo
     'doc_jobs': 3,              # Claude calls at the same time
     'doc_effort': None,         # low, medium, high...: None for the default of claude
-    'doc_budget': 10,           # dollars at API prices a run may spend on Claude; 0: no limit
+    'doc_budget': 0,            # dollars at API prices a run may spend on Claude; 0: no limit
     'index_dir': str(Path.home() / 'photo' / 'patchdoc'),   # the index, thumbnails, previews
     'gui_port': 8765,
     'gui_fill_thumbs': True,    # the search page makes the missing thumbnails in the background

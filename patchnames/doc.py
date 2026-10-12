@@ -36,9 +36,10 @@ a folder of the archive).
 
 Only the photos of the current directory are ever shown to Claude: one call
 per sequence, about a tenth of a dollar at API prices with the default
-model. A run says what it expects to spend before it starts and stops at
-config 'doc_budget' (--budget), the sequences left staying in the directory
-for the next run; --model and --effort pick a cheaper setting.
+model. A run says what it expects to spend before it starts; with a limit
+(config 'doc_budget', --budget; none by default) it stops there, the
+sequences left staying in the directory for the next run; --model and
+--effort pick a cheaper setting.
 
 What the program says is in French, like the descriptions.
 
@@ -2183,7 +2184,7 @@ def main():
     parser.add_argument('--budget', type=float, default=None, metavar='DOLLARS',
                         help="Dépense maximale de ce passage, en dollars US au prix de l'API ; "
                              'les séquences restantes attendent le passage suivant '
-                             '(config doc_budget, 10 ; 0 : sans plafond).')
+                             '(config doc_budget ; sans plafond par défaut).')
     parser.add_argument('--model', default=None,
                         help='Le modèle de Claude : opus, sonnet (environ la moitié du coût), '
                              'haiku (environ 3 %% du coût, moins sûr de lui). Par défaut : celui '

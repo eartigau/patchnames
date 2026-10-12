@@ -238,10 +238,11 @@ demandé à effort réduit : ses notes sont sorties les mêmes). Avec
 l'œil. `{"doc_eyes_model": "sonnet"}` confie le seul second regard à
 Sonnet : mêmes notes à l'essai, pour 0,02 à 0,04 $.
 
-Chaque passage annonce ce qu'il compte dépenser, et s'arrête à `doc_budget`
-(10 $ ; `--budget`, 0 pour aucun plafond) : les séquences restantes
-attendent dans le dossier le passage suivant. Pour changer le réglage une
-fois pour toutes, dans `~/.config/patchnames/config.json` :
+Chaque passage annonce ce qu'il compte dépenser. Il n'y a pas de plafond
+par défaut ; pour en mettre un, `doc_budget` (en dollars au prix de l'API)
+ou `--budget` : le passage, ou la file de la page, s'y arrête, et les
+séquences restantes attendent le suivant. Pour changer le réglage une fois
+pour toutes, dans `~/.config/patchnames/config.json` :
 
 ```json
 {"keywords_model": "sonnet", "doc_effort": "low", "doc_budget": 5}
@@ -602,7 +603,7 @@ disque est en réseau.
   "photo_archive_remotes": {},
   "remote_exiftool": null,
   "bird_focal_min": 200,
-  "doc_budget": 10,
+  "doc_budget": 0,
   "people": [],
   "index_dir": "~/photo/patchdoc",
   "ebird_dir": "~/.config/patchnames/ebird",

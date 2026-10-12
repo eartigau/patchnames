@@ -38,7 +38,7 @@ is finished the next time it starts. "Écrire dans les fichiers" does the
 second step alone. The button above the results does both for every
 sequence shown that has no description yet, two at a time in the background:
 it goes on when the page is closed, and the page says how far it is when it
-comes back. The calls of a session stop at config 'doc_budget'.
+comes back. The calls of a session stop at config 'doc_budget', if one is set.
 
 The server listens on 127.0.0.1 only, answers only to its own address (so
 that no other site can reach it through the browser), and the actions that
