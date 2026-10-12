@@ -160,18 +160,23 @@ fichier en mots-clés (`œil net 4/5`) et dans une hiérarchie Lightroom
 Dans une rafale, chaque vue a ses propres notes, pour trouver la meilleure
 du lot :
 
-- `patchdoc` lit chaque vue en pleine résolution et mesure sa netteté là où
-  l'appareil a fait le point.
-- Claude voit, dans le même appel, toutes les vues recadrées autour de leur
-  point de mise au point (16 par planche, 96 vues au plus ; au-delà, une vue
-  prend les notes de sa voisine), et les douze vues les plus nettes en
-  pleine résolution, un carré de 512 pixels autour du point de mise au
-  point. Il dit pour chaque vue si l'œil se voit, sa netteté, le dégagement
-  et la hauteur d'œil.
-- L'œil est jugé en pleine résolution quand il est près du point de mise au
-  point ; sinon sur la vue réduite, plus grossièrement, et sa note ne
-  dépasse alors pas 4. Une vue où l'œil ne se voit pas n'a pas de note
-  d'œil ; une vue que l'oiseau a quittée n'en a aucune.
+- `patchdoc` lit chaque vue en pleine résolution.
+- **Premier regard de Claude** : toutes les vues, recadrées autour de leur
+  point de mise au point et réduites (16 par planche, 96 vues au plus ;
+  au-delà, une vue prend les notes de sa voisine). Il dit pour chaque vue si
+  l'œil se voit et où il est, le dégagement et la hauteur d'œil.
+- **Second regard**, un appel court : l'œil de chaque vue en pleine
+  résolution, un carré de 512 pixels centré là où le premier regard l'a
+  trouvé. Le point de mise au point de l'appareil ne suffit pas pour cela :
+  il n'est pas sur l'œil, et la tête bouge d'une vue à l'autre. S'il y a
+  plus de douze vues où l'œil se voit, ce sont les douze dont l'œil mesure
+  le plus net. Claude note la netteté de chaque œil, avec pour indice la
+  netteté mesurée dans chaque carré.
+- Une vue dont l'œil se voit sans être parmi ces douze reçoit la note de la
+  vue jugée dont la netteté mesurée est la plus proche, moins un point
+  chaque fois que la sienne est deux fois moindre. Une vue où l'œil ne se
+  voit pas n'a pas de note d'œil ; une vue que l'oiseau a quittée n'en a
+  aucune.
 - La meilleure vue est celle dont le total est le plus haut, l'œil comptant
   double. Elle porte le mot-clé `meilleure vue` (`Qualité|Meilleure vue`)
   et c'est elle qui représente la séquence dans la page : la tuile, les
@@ -182,10 +187,10 @@ du lot :
 
 Ce qu'il faut en savoir :
 
-- La netteté mesurée dépend de ce qui se trouve sous le point de mise au
-  point (un plumage contrasté « mesure » plus net qu'une joue unie) : elle
-  sert à choisir les vues montrées en grand et à départager deux vues à
-  égalité, pas à noter.
+- La netteté mesurée l'est dans le carré de l'œil : elle se compare d'une
+  vue à l'autre d'une même rafale, pas d'une rafale à l'autre. Elle choisit
+  les vues du second regard, lui sert d'indice et départage deux vues à
+  égalité ; la note, c'est Claude qui la donne en regardant l'œil.
 - Le titre, la description et les mots-clés valent pour la séquence : ils
   sont les mêmes dans toutes ses vues.
 - Une séquence décrite avant cette version garde pour toutes ses vues les
@@ -225,10 +230,13 @@ au prix de l'API :
 | `--model sonnet --effort low` | 0,05 $ | les mêmes |
 | `--model haiku --effort low` | 0,003 $ | les mêmes espèces, moins sûr de lui, descriptions moins justes |
 
-Une rafale d'oiseau coûte davantage, parce que chaque vue est montrée :
-mesuré avec le modèle par défaut, 0,22 $ pour une rafale de 11 vues et
-0,17 $ pour une de 7 vues ; 0,005 $ avec `--model haiku --effort low`, moins
-sûr quand il juge l'œil (il en a manqué un bien visible aux essais).
+Une rafale d'oiseau coûte davantage, parce que chaque vue est montrée et
+qu'il y a deux appels : mesuré avec le modèle par défaut sur une rafale de
+7 vues, 0,21 $ pour le premier regard et 0,06 $ pour le second (toujours
+demandé à effort réduit : ses notes sont sorties les mêmes). Avec
+`--model haiku --effort low`, 0,006 $ en tout, mais il juge moins bien
+l'œil. `{"doc_eyes_model": "sonnet"}` confie le seul second regard à
+Sonnet : mêmes notes à l'essai, pour 0,02 à 0,04 $.
 
 Chaque passage annonce ce qu'il compte dépenser, et s'arrête à `doc_budget`
 (10 $ ; `--budget`, 0 pour aucun plafond) : les séquences restantes

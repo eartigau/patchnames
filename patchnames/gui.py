@@ -272,7 +272,8 @@ def _work(seq, ask, write=True):
         if ask:
             # (the frames of a burst of bird photos are read one by one first)
             _, cost = describe_sequence(
-                seq, progress=lambda done, total: tell(measured=done, frames=total))
+                seq, progress=lambda done, total, stage=None: tell(measured=done, frames=total,
+                                                                   stage=stage))
             with _lock:
                 _spent['total'] += cost
         if not write:
@@ -366,7 +367,8 @@ def _batch_status(since=0):
     under way), what each sequence under way is at, and the writing into
     the files that follows"""
     with _lock:
-        jobs = [dict({key: _jobs.get(seq, {}).get(key) for key in ('state', 'measured', 'frames')},
+        jobs = [dict({key: _jobs.get(seq, {}).get(key)
+                      for key in ('state', 'measured', 'frames', 'stage')},
                      seq=seq, photos=_batch['sizes'].get(seq, 1),
                      seconds=round(time.time() - (_jobs.get(seq, {}).get('since') or time.time())))
                 for seq in _batch['active']]

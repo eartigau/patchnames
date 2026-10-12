@@ -275,7 +275,8 @@ function showBatch(status) {
   const lines = (status.jobs || []).map((job) => {
     const reading = job.frames && job.measured < job.frames;
     return `▸ ${job.seq} · ${plural(job.photos, "vue", "vues")} · `
-      + (reading ? `lecture des vues ${job.measured} sur ${job.frames}` : "Claude regarde la séquence")
+      + (reading ? `lecture des vues ${job.measured} sur ${job.frames}`
+        : job.stage === "yeux" ? "Claude regarde l'œil de chaque vue de près" : "Claude regarde la séquence")
       + ` · ${clock(job.seconds)}`;
   });
   const writes = status.writes || {};
@@ -404,7 +405,7 @@ async function loadStrip(photo, index) {
     const cell = el("div", {
       class: "frame" + (frame.best ? " best" : ""),
       title: [frame.name, rated && said, frame.best && "Meilleure vue de la rafale",
-              rated && frame.sharp && `Netteté mesurée au point de mise au point : ${Math.round(100 * frame.sharp)} % de la vue la plus nette`]
+              rated && frame.sharp && `Netteté mesurée sur l'œil : ${Math.round(100 * frame.sharp)} % de la vue la plus nette`]
         .filter(Boolean).join("\n"),
       onclick: () => show(frame.name),
     }, img, rated && el("span", { class: "notes", text: (frame.best ? "★ " : "")
@@ -601,7 +602,7 @@ async function work(photo, what) {
       if (job.state === "running" && job.frames) {
         say(job.measured < job.frames
           ? `Lecture des vues de la rafale, pour noter chacune : ${job.measured} sur ${job.frames}…`
-          : "Claude regarde la séquence…", true);
+          : job.stage === "yeux" ? "Claude regarde l'œil de chaque vue de près…" : "Claude regarde la séquence…", true);
       } else if (job.state === "writing") {
         say(job.files ? `Écriture dans les fichiers : ${job.written} sur ${job.files}…` : "Écriture dans les fichiers…", true);
       } else if (job.state === "done") {

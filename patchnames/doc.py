@@ -82,19 +82,19 @@ OFFLIST = 'absent de la liste eBird'
 #: start of GPSAreaInformation in a file whose position is that of its eBird
 #:  checklist, written here
 GPS_MARK = 'eBird'
-#: a burst of bird photos is noted frame by frame. Claude sees every frame cut
-#:  to TILE_CUT pixels around its focus point and shown at TILE, TILES to a
-#:  sheet (beyond RATED frames, the others take the notes of the nearest), and
-#:  the EYES sharpest frames at full resolution, a square of EYE pixels around
-#:  the focus point, EYE_SHEET to a sheet, to judge the focus on the eye
+#: a burst of bird photos is noted frame by frame, in two calls. Claude first
+#:  sees every frame cut to TILE_CUT pixels around its focus point and shown
+#:  at TILE, TILES to a sheet (beyond RATED frames, the others take the notes
+#:  of the nearest), and says where the eye is in each. It then sees the EYES
+#:  frames whose eye is the sharpest at full resolution, a square of EYE
+#:  pixels around the eye, EYE_SHEET to a sheet, to judge the focus on it
 TILE_CUT, TILE, TILES, RATED = (1400, 933), (350, 233), 16, 96
 EYE, EYE_SHEET, EYES = 512, 6, 12
 #: frames of a burst read from the archive at the same time: a network drive
 #:  answers slowly, and mostly waits
 READS = 4
 #: a frame whose eye Claude did not see at full resolution: the note of one it
-#:  saw, less this much each time the sharpness measured at the focus point
-#:  halves
+#:  saw, less this much each time the sharpness measured on the eye halves
 SOFTER = 1.0
 #: keyword of the best frame of a burst
 BEST = 'meilleure vue'
@@ -145,7 +145,7 @@ Réponds par un objet JSON :
 - "oeil_net" : pour un oiseau, la netteté de la mise au point sur son œil, de 1 à 5, jugée sur l'agrandissement à pleine résolution : 5 = œil parfaitement net (reflet et détail des plumes autour de l'œil), 3 = acceptable, 1 = flou ; null si l'œil ne se voit pas ou s'il n'y a pas d'oiseau ;
 - "degage" : pour un oiseau, à quel point il est dégagé, de 1 à 5 : 5 = entier et sans rien devant lui, 3 = en partie masqué, 1 = presque caché par des branches ou des feuilles ; null sans oiseau ;
 - "hauteur_oeil" : pour un oiseau, à quel point la photo est prise à la hauteur de son œil, de 1 à 5 : 5 = appareil à sa hauteur, 3 = angle modéré, 1 = forte plongée ou contre-plongée (oiseau haut dans un arbre ou dans le ciel, ou vu de dessus) ; null sans oiseau ;
-- "vues" : s'il y a des planches « vues » et « yeux », une entrée par vue numérotée, pour trouver la meilleure de la rafale : {{"numero": "...", "oeil_visible": true si l'œil de l'oiseau se voit dans cette vue, "oeil_net": la netteté de son œil de 1 à 5, jugée sur la planche « yeux » quand l'œil s'y voit ; quand il ne se voit que sur la planche « vues », juge-la là, plus grossièrement, sans dépasser 4 ; null si l'œil ne se voit pas, "degage": 1 à 5, "hauteur_oeil": 1 à 5}}, avec les mêmes échelles ; "degage" et "hauteur_oeil" valent null si l'oiseau n'est pas dans la vue. Les vues d'une rafale diffèrent (l'oiseau tourne la tête, passe derrière une branche, s'envole) : note chacune pour elle-même. [] sans ces planches ;
+- "vues" : s'il y a des planches « vues », une entrée par vue numérotée, pour trouver la meilleure de la rafale : {{"numero": "...", "oeil_visible": true si l'œil de l'oiseau se voit dans cette vue, "oeil_x" et "oeil_y": la position de cet œil dans la vue (pas dans la planche), en pourcentage de sa largeur depuis son bord gauche et de sa hauteur depuis son bord haut, de 0 à 100 (null si l'œil ne se voit pas ; s'il y a plusieurs oiseaux, celui sur lequel la mise au point est faite), "oeil_net": la netteté de l'œil de 1 à 5 jugée grossièrement sur cette vue réduite, 4 au plus (elle sera reprise à pleine résolution ; null si l'œil ne se voit pas), "degage": 1 à 5, "hauteur_oeil": 1 à 5}}, avec les mêmes échelles ; "degage" et "hauteur_oeil" valent null si l'oiseau n'est pas dans la vue. Les vues d'une rafale diffèrent (l'oiseau tourne la tête, passe derrière une branche, s'envole) : note chacune pour elle-même. [] sans ces planches ;
 - "liste" : l'identifiant (S...) de la liste eBird à laquelle la séquence appartient, null s'il n'y en a pas ;
 - "note_ebird" : une phrase seulement si ce que tu vois ne s'accorde pas avec la liste eBird (espèce absente de la liste, autre espèce plus probable que celle notée) ; une chaîne vide "" quand la photo s'accorde avec la liste ou qu'il n'y a pas de liste."""
 
@@ -160,11 +160,31 @@ SHEETS = (" ; les suivantes sont des planches contact de toutes les vues de la s
 SHARPEST = ('du milieu', 'la plus nette')
 BURST = (" ; viennent ensuite les planches « vues », où chaque vue de la séquence est recadrée "
          "autour de son point de mise au point et réduite quatre fois (son numéro est écrit "
-         "dessus), pour vérifier qu'il s'agit du même sujet et noter chaque vue ; puis les "
-         "planches « yeux », où les vues les plus nettes sont montrées à pleine résolution "
-         "autour de leur point de mise au point (même numéro), pour juger la netteté de l'œil "
-         "vue par vue. Le titre et la description parlent de ce que montre la séquence, jamais "
-         "des planches, des numéros de vue ni de la netteté")
+         "dessus), pour vérifier qu'il s'agit du même sujet, noter chaque vue et dire où est "
+         "l'œil de l'oiseau dans chacune. Le titre et la description parlent de ce que montre "
+         "la séquence, jamais des planches, des numéros de vue ni de la netteté")
+
+#: the second call for a burst: the eye of each frame at full resolution
+EYES_SYSTEM = ("Tu juges la netteté de photos d'oiseaux. Tu lis les images indiquées avec l'outil "
+               "Read, puis tu réponds uniquement par l'objet JSON demandé.")
+EYES_PROMPT = """Tu notes la netteté de l'œil d'un oiseau ({subject}) sur plusieurs vues d'une même rafale, pour trouver la meilleure.
+
+Lis ces images avec l'outil Read :
+{images}
+
+Chaque planche montre des vues numérotées, à pleine résolution, recadrées autour de l'œil de l'oiseau. Pour chaque vue, note la netteté de la mise au point sur l'œil, de 1 à 5 : 5 = œil parfaitement net (reflet net, détail des plumes autour de l'œil), 3 = acceptable, 1 = flou. Compare les vues entre elles : les notes doivent les départager. null si l'œil ne se voit pas dans le carré.
+
+Un indice : la netteté mesurée dans chaque carré (finesse des détails), en pourcentage de celle du carré le plus net : {measured}. Elle départage bien deux vues du même cadrage ; un carré mal centré ou un flou de bougé sur l'œil seul la trompent, et c'est l'œil que tu juges.
+
+Réponds par un objet JSON : {{"yeux": [{{"numero": "...", "oeil_net": 1 à 5 ou null}}]}}, une entrée par vue."""
+EYES_SCHEMA = {
+    'type': 'object',
+    'properties': {'yeux': {'type': 'array', 'items': {
+        'type': 'object',
+        'properties': {'numero': {'type': 'string'}, 'oeil_net': {'type': ['integer', 'null']}},
+        'required': ['numero', 'oeil_net'], 'additionalProperties': False}}},
+    'required': ['yeux'], 'additionalProperties': False,
+}
 
 BIRD = ("Elle a été prise au téléobjectif ({focal} mm) : le sujet est presque toujours un "
         "oiseau, parfois un autre animal.")
@@ -196,10 +216,13 @@ SCHEMA = {
         'vues': {'type': 'array', 'items': {
             'type': 'object',
             'properties': {'numero': {'type': 'string'}, 'oeil_visible': {'type': 'boolean'},
+                           'oeil_x': {'type': ['number', 'null']},
+                           'oeil_y': {'type': ['number', 'null']},
                            'oeil_net': {'type': ['integer', 'null']},
                            'degage': {'type': ['integer', 'null']},
                            'hauteur_oeil': {'type': ['integer', 'null']}},
-            'required': ['numero', 'oeil_visible', 'oeil_net', 'degage', 'hauteur_oeil'],
+            'required': ['numero', 'oeil_visible', 'oeil_x', 'oeil_y', 'oeil_net', 'degage',
+                         'hauteur_oeil'],
             'additionalProperties': False}},
         'liste': {'type': ['string', 'null']},
         'note_ebird': {'type': 'string'},
@@ -637,17 +660,23 @@ def _cut(img, row, size):
     return img.crop((left, top, left + w, top + h))
 
 
-def sharpness(img, row):
-    """how sharp a frame is where the camera focused: the variance of the
-    Laplacian of a 512 px square at full resolution, its pixels binned by
-    two against the noise. A number to compare the frames of a burst, which
-    show the same subject in the same light; it means nothing alone."""
+def _detail(patch):
+    """how sharp a piece of a picture at full resolution is: the variance of
+    its Laplacian, the pixels binned by two against the noise. A number to
+    compare pieces that show the same thing in the same light (the eye of
+    the bird in the frames of a burst); it means nothing alone."""
     import numpy as np
-    a = np.asarray(_cut(img, row, (512, 512)).convert('L'), dtype='float32')
+    a = np.asarray(patch.convert('L'), dtype='float32')
     a = a[:a.shape[0] // 2 * 2, :a.shape[1] // 2 * 2]
     a = (a[0::2, 0::2] + a[1::2, 0::2] + a[0::2, 1::2] + a[1::2, 1::2]) / 4
     lap = 4 * a[1:-1, 1:-1] - a[:-2, 1:-1] - a[2:, 1:-1] - a[1:-1, :-2] - a[1:-1, 2:]
     return float(lap.var())
+
+
+def sharpness(img, row):
+    """how sharp a frame is where the camera focused (a 512 px square): what
+    picks the frame of a burst shown large to Claude"""
+    return _detail(_cut(img, row, (512, 512)))
 
 
 def _number(name):
@@ -671,29 +700,31 @@ def _sheet(pictures, columns, size):
 
 
 def burst_pictures(names, load, rows, tmpdir, index, keep=None, progress=None, jobs=1):
-    """the pictures of a burst of bird photos for Claude: its sharpest frame
-    at 1400 px and the crop of that frame at full resolution around its focus
-    point, to say what it shows; the sheets "vues", every frame cut around
-    its own focus point and reduced; and the sheets "yeux", the EYES
-    sharpest frames at full resolution around their focus point.
+    """the pictures of a burst of bird photos for Claude's first look: its
+    sharpest frame at 1400 px and the crop of that frame at full resolution
+    around its focus point, to say what it shows; and the sheets "vues",
+    every frame cut around its own focus point and reduced, to note each and
+    say where its eye is.
 
     Each frame is loaded once at full size (load(name) -> a PIL image; it
-    may fill rows[name] on the way), `jobs` at a time, which also gives its
-    sharpness; one that cannot be read is left out. Returns
-    the paths and what frame_notes needs: {'sharp': {name: sharpness},
-    'shown': the sharpest frame, 'rated': the frames of the sheets "vues",
-    'eyes': those of the sheets "yeux"}; raises RuntimeError when no frame
-    can be read."""
-    sharp, tiles, squares = {}, {}, {}
+    may fill rows[name] on the way), `jobs` at a time; one that cannot be
+    read is left out. Returns the paths and what eye_pictures and frame_notes
+    need: {'sharp': {name: sharpness at the focus point}, 'shown': the
+    sharpest frame, 'rated': the frames of the sheets, 'cuts': {name: file
+    of its cut at full resolution}}; raises RuntimeError when no frame can
+    be read."""
+    sharp, tiles, cuts = {}, {}, {}
     best, lock = {'name': None, 'img': None, 'size': None, 'read': 0}, threading.Lock()
 
     def measure(name):
         try:
             img = load(name)
             row = rows.get(name, {})
-            value, tile, square = sharpness(img, row), _cut(img, row, TILE_CUT), _cut(img, row,
-                                                                                    (EYE, EYE))
+            value, cut = sharpness(img, row), _cut(img, row, TILE_CUT)
+            tile = cut.copy()
             tile.thumbnail(TILE)
+            file = os.path.join(tmpdir, f'seq{index:03d}_cut_{os.path.splitext(name)[0]}.jpg')
+            cut.save(file, quality=95)
         except Exception:
             img = None
         with lock:
@@ -701,9 +732,7 @@ def burst_pictures(names, load, rows, tmpdir, index, keep=None, progress=None, j
             #   not compare with the others')
             best['size'] = best['size'] or (sorted(img.size) if img is not None else None)
             if img is not None and sorted(img.size) == best['size']:
-                sharp[name], tiles[name], squares[name] = value, tile, square
-                if len(squares) > EYES:
-                    del squares[min(squares, key=sharp.get)]
+                sharp[name], tiles[name], cuts[name] = value, tile, file
                 if best['name'] is None or value > sharp[best['name']]:
                     best['name'], best['img'] = name, img
             else:
@@ -730,14 +759,79 @@ def burst_pictures(names, load, rows, tmpdir, index, keep=None, progress=None, j
     seen = [name for name in names if name in sharp]
     rated = seen if len(seen) <= RATED else [
         seen[round(i * (len(seen) - 1) / (RATED - 1))] for i in range(RATED)]
-    eyes = [name for name in seen if name in squares]
-    for kind, frames, pictures, columns, size, count in (
-            ('vues', rated, tiles, 4, TILE, TILES), ('yeux', eyes, squares, 3, (EYE, EYE), EYE_SHEET)):
-        for start in range(0, len(frames), count):
-            paths.append(os.path.join(tmpdir, f'seq{index:03d}_{kind}{start // count}.jpg'))
-            _sheet([(name, pictures[name]) for name in frames[start:start + count]], columns,
-                   size).save(paths[-1], quality=88)
-    return paths, {'sharp': sharp, 'shown': shown, 'rated': rated, 'eyes': eyes}
+    for start in range(0, len(rated), TILES):
+        paths.append(os.path.join(tmpdir, f'seq{index:03d}_vues{start // TILES}.jpg'))
+        _sheet([(name, tiles[name]) for name in rated[start:start + TILES]], 4,
+               TILE).save(paths[-1], quality=88)
+    return paths, {'sharp': sharp, 'shown': shown, 'rated': rated, 'cuts': cuts}
+
+
+def eye_pictures(burst, answer, tmpdir, index):
+    """the sheets "yeux" of a burst, for Claude's second look: the frames
+    whose eye it found, at full resolution, a square around the eye; the
+    EYES whose eye is the sharpest when there are more. Returns the paths
+    and the frames on them; burst['eye'] gets the sharpness measured on the
+    eye of every frame that shows one."""
+    from PIL import Image
+    said = {str(view.get('numero', '')).strip(): view for view in answer.get('vues') or []}
+    squares, burst['eye'] = {}, {}
+    for name in burst['rated']:
+        view = said.get(_number(name)) or {}
+        if not view.get('oeil_visible') or view.get('oeil_x') is None or view.get('oeil_y') is None:
+            continue
+        try:
+            cut = Image.open(burst['cuts'][name])
+            x = min(max(float(view['oeil_x']), 0.0), 100.0) / 100 * cut.width
+            y = min(max(float(view['oeil_y']), 0.0), 100.0) / 100 * cut.height
+        except (OSError, TypeError, ValueError):
+            continue
+
+        def around(size):
+            left = int(min(max(x - size / 2, 0), cut.width - size))
+            top = int(min(max(y - size / 2, 0), cut.height - size))
+            return cut.crop((left, top, left + size, top + size))
+
+        # (the eye is near the middle of the square, not exactly there: the
+        #   whole square is measured)
+        squares[name] = around(EYE)
+        burst['eye'][name] = _detail(squares[name])
+    eyes = sorted(sorted(squares, key=burst['eye'].get, reverse=True)[:EYES],
+                  key=burst['rated'].index)
+    paths = []
+    for start in range(0, len(eyes), EYE_SHEET):
+        paths.append(os.path.join(tmpdir, f'seq{index:03d}_yeux{start // EYE_SHEET}.jpg'))
+        _sheet([(name, squares[name]) for name in eyes[start:start + EYE_SHEET]], 3,
+               (EYE, EYE)).save(paths[-1], quality=90)
+    return paths, eyes
+
+
+def judge_eyes(seq, answer, tmpdir, index, model=None):
+    """Claude's second look at a burst: the focus on the eye of each frame,
+    seen at full resolution where its first look said the eye is. Fills
+    seq['burst']['judged'] = {name: note}; the cost in dollars. A call that
+    fails leaves the rough notes of the first look. It is a comparison of a
+    few squares, asked at low effort (the notes came out the same as at the
+    default one, for less) of config 'doc_eyes_model' or of `model`."""
+    model, effort = _cfg().get('doc_eyes_model') or model, 'low'
+    burst = seq['burst']
+    burst['judged'] = {}
+    paths, eyes = eye_pictures(burst, answer, tmpdir, index)
+    if not eyes:
+        return 0.0
+    subject = ', '.join(sp.get('francais', '') for sp in answer.get('especes') or []) or 'oiseau'
+    try:
+        top = max(burst['eye'][name] for name in eyes) or 1.0
+        measured = ', '.join(f"{_number(name)} : {100 * burst['eye'][name] / top:.0f} %"
+                             for name in eyes)
+        said, cost = ask_claude(EYES_PROMPT.format(subject=subject, images='\n'.join(paths),
+                                                   measured=measured), tmpdir, model, effort,
+                                schema=EYES_SCHEMA, system=EYES_SYSTEM, needs=('yeux',))
+    except RuntimeError:
+        return 0.0
+    notes = {str(view.get('numero', '')).strip(): _note(view.get('oeil_net'))
+             for view in said.get('yeux') or []}
+    burst['judged'] = {name: notes.get(_number(name)) for name in eyes}
+    return cost
 
 
 def frame_notes(names, burst, answer):
@@ -745,47 +839,48 @@ def frame_notes(names, burst, answer):
     'sharp', 'best'}}, and its best frame.
 
     How clear the bird is, how close to eye level the photo is and whether
-    the eye shows come from Claude, frame by frame, on the sheets "vues"
-    (a frame that was not on them takes the notes of the nearest that was).
-    The focus on the eye comes from Claude too: seen at full resolution on
-    the sheets "yeux" when the eye is near the focus point, more roughly on
-    the sheets "vues" otherwise (4 at most, then). A frame that was on no
-    sheet and whose eye should show gets the note of the noted frame nearest
-    in measured sharpness, less SOFTER points each time its sharpness is
-    half of that one's. A frame whose eye does not show has no note for it.
-    The best frame has the highest total, the focus on the eye counting
-    double."""
+    the eye shows come from Claude's first look, frame by frame (a frame
+    that was on no sheet takes the notes of the nearest that was). The
+    focus on the eye comes from its second look, at full resolution around
+    the eye (burst['judged']). A frame whose eye shows but was not among
+    those gets the note of the judged frame nearest in sharpness measured on
+    the eye, less SOFTER points each time its own is half of that one's;
+    failing that, the rough note of the first look, 4 at most. A frame
+    whose eye does not show has no note for it. 'sharp' is the sharpness
+    measured on the eye, 1 for the sharpest of the burst. The best frame
+    has the highest total, the focus on the eye counting double."""
     import math
-    sharp, rated, shown = burst['sharp'], burst['rated'], burst['shown']
+    sharp, rated = burst['sharp'], burst['rated']
+    eye_sharp = burst.get('eye') or {}
     place = {name: k for k, name in enumerate(names)}
     said = {str(view.get('numero', '')).strip(): view for view in answer.get('vues') or []}
-    judged = {name: _note(said.get(_number(name), {}).get('oeil_net'))
-              for name in names if name in sharp}
-    judged = {name: note if name in burst['eyes'] else min(note, 4)
-              for name, note in judged.items() if note}
-    if shown not in judged and _number(shown) not in said and _note(answer.get('oeil_net')):
-        # no word of it frame by frame: the note given for the frame shown large
-        judged[shown] = _note(answer.get('oeil_net'))
-    top = max(sharp.values()) or 1.0
+    judged = {name: note for name, note in (burst.get('judged') or {}).items() if note}
+    top = max(eye_sharp.values(), default=0) or 1.0
 
     def log(name):
-        return math.log2(max(sharp[name], 1e-6))
+        return math.log2(max(eye_sharp[name], 1e-6))
 
     notes = {}
     for name in (name for name in names if name in sharp):
         near = min(rated, key=lambda other: abs(place[other] - place[name]))
         # (a frame Claude said nothing of: the notes of the sequence)
         view = said.get(_number(near)) or {'degage': answer.get('degage'),
-                                           'hauteur_oeil': answer.get('hauteur_oeil')}
+                                           'hauteur_oeil': answer.get('hauteur_oeil'),
+                                           'oeil_net': answer.get('oeil_net'), 'oeil_visible': True}
         eye = judged.get(name)
-        if eye is None and judged and view.get('oeil_visible', True) and _number(name) not in said:
-            like = min(judged, key=lambda other: abs(log(other) - log(name)))
-            eye = min(5, max(1, round(judged[like] + SOFTER * (log(name) - log(like)))))
+        if eye is None and view.get('oeil_visible'):
+            like = [other for other in judged if other in eye_sharp]
+            if name in eye_sharp and like:
+                like = min(like, key=lambda other: abs(log(other) - log(name)))
+                eye = min(5, max(1, round(judged[like] + SOFTER * (log(name) - log(like)))))
+            else:
+                eye = min(_note(view.get('oeil_net')) or 0, 4) or None
         notes[name] = {'eye': eye, 'clear': _note(view.get('degage')),
                        'level': _note(view.get('hauteur_oeil')),
-                       'sharp': round(sharp[name] / top, 3), 'best': 0}
+                       'sharp': round(eye_sharp[name] / top, 3) if name in eye_sharp else None,
+                       'best': 0}
     best = max(notes, key=lambda name: (2 * (notes[name]['eye'] or 0) + (notes[name]['clear'] or 0)
-                                        + (notes[name]['level'] or 0) + notes[name]['sharp']))
+                                        + (notes[name]['level'] or 0) + (notes[name]['sharp'] or 0)))
     notes[best]['best'] = 1
     return notes, best
 
@@ -886,11 +981,14 @@ def prompt_for(seq, images, rows, instructions):
         instructions=instructions, topics=', '.join(f'"{topic}"' for topic in TOPICS))
 
 
-def ask_claude(prompt, tmpdir, model=None, effort=None, tries=2):
-    """Claude's answer to a prompt, as (dict, cost in dollars at API prices)"""
-    cmd = ['claude', '-p', prompt, '--system-prompt', SYSTEM, '--tools', 'Read',
+def ask_claude(prompt, tmpdir, model=None, effort=None, tries=2, schema=None, system=None,
+               needs=('titre', 'description')):
+    """Claude's answer to a prompt, as (dict, cost in dollars at API prices);
+    schema: that of the answer (the description of a sequence by default),
+    needs: the keys it must not come back without"""
+    cmd = ['claude', '-p', prompt, '--system-prompt', system or SYSTEM, '--tools', 'Read',
            '--allowedTools', 'Read', '--add-dir', tmpdir, '--output-format', 'json',
-           '--json-schema', json.dumps(SCHEMA), '--no-session-persistence',
+           '--json-schema', json.dumps(schema or SCHEMA), '--no-session-persistence',
            '--strict-mcp-config', '--disable-slash-commands']
     if model:
         cmd += ['--model', model]
@@ -912,7 +1010,7 @@ def ask_claude(prompt, tmpdir, model=None, effort=None, tries=2):
                 if start < 0 or end < start:
                     raise RuntimeError(f'pas de JSON dans la réponse : {text[:300]}')
                 answer = json.loads(text[start:end + 1])
-            for key in ('titre', 'description'):
+            for key in needs:
                 if not answer.get(key):
                     raise RuntimeError(f"la réponse n'a pas de {key} : {answer}")
             return answer, float(out.get('total_cost_usd') or 0.0)
@@ -1165,6 +1263,9 @@ def document(gap=None, force=False, dry_run=False, index_only=False, backup=True
                     middle, Image.open(staged[middle]['preview']), when.isoformat(' ') if when else None)
             answer, cost = ask_claude(prompt_for(seq, images, rows, explanations), tmpdir,
                                       model, effort)
+            if seq.get('burst'):
+                # a second look, at the eye of each frame at full resolution
+                cost += judge_eyes(seq, answer, tmpdir, index, model)
             with lock:
                 spent['total'] += cost
             kept, checklist = settle(seq, answer, data)
@@ -1514,7 +1615,8 @@ def describe_sequence(seq_id, model=None, effort=None, sheet=12, progress=None):
     cost in dollars at API prices. The answer goes to the index, and waits
     there for write_sequence to put it into the files. Every frame of a burst
     of bird photos is read, to note each one (progress(done, total) as they
-    are); of another sequence, only the middle frame. Raises RuntimeError
+    are, then progress(total, total, 'yeux') when Claude takes its second
+    look, at the eyes); of another sequence, only the middle frame. Raises RuntimeError
     when the sequence cannot be read (the archive drive is not mounted)."""
     cfg = _cfg()
     path = write_template(instructions_path(), quiet=True)
@@ -1577,6 +1679,11 @@ def describe_sequence(seq_id, model=None, effort=None, sheet=12, progress=None):
         answer, cost = ask_claude(prompt_for(seq, images, rows, explanations), tmpdir,
                                   model or cfg.get('keywords_model'),
                                   effort or cfg.get('doc_effort'))
+        if seq.get('burst'):
+            # a second look, at the eye of each frame at full resolution
+            if progress:
+                progress(len(names), len(names), 'yeux')
+            cost += judge_eyes(seq, answer, tmpdir, 0, model or cfg.get('keywords_model'))
     kept, _ = settle(seq, answer, data)
     notes, best = {}, None
     if seq.get('burst'):
