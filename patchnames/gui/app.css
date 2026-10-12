@@ -45,6 +45,23 @@
   cursor: pointer;
 }
 
+/* the orders of the gallery, above it: smaller than the tabs of the sections */
+.sorts {
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.sorts .mono {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.sorts .tab {
+  padding: 4px 13px;
+  font-size: 0.84rem;
+}
+
 .tab:hover,
 .tab.on {
   color: var(--accent);

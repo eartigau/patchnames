@@ -119,6 +119,14 @@ function setSection(section, quiet) {
   if (!quiet) load(true);
 }
 
+// the order of the gallery, chosen with the buttons above it
+function setSort(sort, quiet) {
+  const known = [...$("sorts").querySelectorAll(".tab")].some((tab) => tab.dataset.sort === sort);
+  $("sort").value = known ? sort : "new";
+  for (const tab of $("sorts").querySelectorAll(".tab")) tab.classList.toggle("on", tab.dataset.sort === $("sort").value);
+  if (!quiet) load(true);
+}
+
 /* ── Search ─────────────────────────────────────────────────────────── */
 
 function query() {
@@ -1142,6 +1150,8 @@ async function start() {
   for (const key of FIELDS) if (asked.get(key)) $(key).value = asked.get(key);
   setSection($("section").value, true);
   for (const tab of $("sections").querySelectorAll(".tab")) tab.addEventListener("click", () => setSection(tab.dataset.section));
+  setSort($("sort").value || "new", true);
+  for (const tab of $("sorts").querySelectorAll(".tab")) tab.addEventListener("click", () => setSort(tab.dataset.sort));
   state.checklist = asked.get("checklist") || "";
   showChecklistChip();
 
@@ -1155,6 +1165,7 @@ async function start() {
   $("checklistChip").addEventListener("click", () => setFilter({ checklist: "" }));
   $("reset").addEventListener("click", () => {
     for (const key of FIELDS) $(key).value = key === "sort" ? "new" : "";
+    setSort("new", true);
     state.checklist = "";
     showChecklistChip();
     setSection("");

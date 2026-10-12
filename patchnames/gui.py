@@ -103,7 +103,7 @@ BATCH_JOBS = 2
 def _db():
     """a read-only connection to the index"""
     path = os.path.join(photoindex.index_dir(), 'photos.sqlite')
-    db = sqlite3.connect(f'file:{path}?mode=ro', uri=True, timeout=30)
+    db = photoindex.collate(sqlite3.connect(f'file:{path}?mode=ro', uri=True, timeout=30))
     db.row_factory = sqlite3.Row
     return db
 

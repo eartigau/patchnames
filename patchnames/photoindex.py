@@ -119,6 +119,18 @@ def fold(text):
     return ''.join(ch for ch in text if not unicodedata.combining(ch)).lower()
 
 
+def _compare(one, other):
+    one, other = fold(one), fold(other)
+    return (one > other) - (one < other)
+
+
+def collate(db):
+    """give a connection the order of names as French has it, whatever their
+    accents and capitals (ORDER BY ... COLLATE FOLDED); the connection"""
+    db.create_collation('FOLDED', _compare)
+    return db
+
+
 def index_dir():
     return os.path.expanduser(_config_module.load()['index_dir'])
 
@@ -129,7 +141,7 @@ def db_path():
 
 def connect():
     os.makedirs(index_dir(), exist_ok=True)
-    db = sqlite3.connect(db_path(), timeout=60)
+    db = collate(sqlite3.connect(db_path(), timeout=60))
     db.row_factory = sqlite3.Row
     _shared(db)
     _retype(db)
@@ -489,9 +501,24 @@ def _where(q='', species='', listed=False, place='', region='', year='', since='
     return ' AND '.join(where), args
 
 
-ORDERS = {'new': 'COALESCE(p.local, p.taken) DESC, p.name DESC',
-          'old': 'COALESCE(p.local, p.taken), p.name',
-          'title': "p.title IS NULL, p.title COLLATE NOCASE, COALESCE(p.local, p.taken) DESC"}
+#: the orders of the search page. The last three bring first what they are
+#:  named after (the sequences with a species, by its name; the panoramas;
+#:  the photos with people: those named, those proposed, then the faces
+#:  nobody named yet), and the rest after, the newest first
+#:  (a photo without a date, or dated after today by a camera whose clock was
+#:  wrong, comes last in either direction; names are compared as French
+#:  does, É with E: the collation FOLDED of collate())
+_WHEN = 'COALESCE(p.local, p.taken)'
+_UNDATED = f"({_WHEN} IS NULL OR {_WHEN} = '' OR {_WHEN} > datetime('now', '+2 days'))"
+_NEWEST = f'{_UNDATED}, {_WHEN} DESC, p.name DESC'
+ORDERS = {'new': _NEWEST,
+          'old': f'{_UNDATED}, {_WHEN}, p.name',
+          'title': f'p.title IS NULL, p.title COLLATE FOLDED, {_NEWEST}',
+          'species': f"COALESCE(p.species, '') = '', NULLIF(p.species, '') COLLATE FOLDED, {_NEWEST}",
+          'pano': f"COALESCE(p.camera LIKE '% (panorama)', 0) DESC, {_NEWEST}",
+          'people': "CASE WHEN COALESCE(p.people, '') != '' THEN 0 WHEN COALESCE(p.guessed, '') != '' "
+                    'THEN 1 WHEN COALESCE(p.faces, 0) > 0 THEN 2 ELSE 3 END, '
+                    f"COALESCE(NULLIF(p.people, ''), NULLIF(p.guessed, '')) COLLATE FOLDED, {_NEWEST}"}
 
 
 def search(db, sort='new', offset=0, limit=60, **filters):

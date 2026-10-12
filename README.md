@@ -324,6 +324,12 @@ libre, espèce, lieu, région, année et dates, sujet, téléobjectif ou non, et
 ce qui demande un coup d'oeil (identification à confirmer, espèce absente
 de la liste, photos d'oiseaux sans liste).
 
+- **Tri.** Au-dessus de la galerie : « Plus récentes », « Plus anciennes »,
+  « Par espèce » (les séquences qui ont une espèce d'abord, dans l'ordre
+  alphabétique), « Panoramas d'abord » et « Personnes d'abord » (les photos
+  où quelqu'un est nommé, puis celles où un nom est proposé, puis les
+  visages pas encore nommés). Une photo sans date, ou datée dans le futur
+  par un appareil mal réglé, vient toujours à la fin.
 - **Sections.** Tout, Oiseaux, Famille (les photos où il y a des
   personnes), Autre : chaque section montre ses filtres. Pour les oiseaux :
   l'espèce, la liste eBird, et les trois notes que Claude donne de 1 à 5,
