@@ -52,6 +52,7 @@ import sqlite3
 import subprocess
 import sys
 import threading
+import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
@@ -77,7 +78,14 @@ _jobs, _lock, _spent = {}, threading.Lock(), {'total': 0.0}
 #: the batch of the button above the results: the sequences waiting, those
 #:  being done, and what became of the others
 _batch = {'waiting': [], 'active': [], 'total': 0, 'done': 0, 'failed': 0, 'note': '',
-          'finished': [], 'workers': 0}
+          'finished': [], 'workers': 0, 'started': 0.0, 'ended': 0.0, 'sizes': {},
+          'photos': 0, 'photos_done': 0}
+#: the writing into the files of what the index learned (the batch leaves it
+#:  to _resume, one sequence after the other): how many sequences wait, the
+#:  one being written and how far; _wake: there is something new to write;
+#:  _writing: the sequences whose files somebody is rewriting
+_writes = {'waiting': 0, 'seq': None, 'written': 0, 'files': 0, 'error': ''}
+_wake, _writing = threading.Event(), set()
 #: sequences of a batch done at the same time (each reads and rewrites files
 #:  of the archive)
 BATCH_JOBS = 2
@@ -185,16 +193,21 @@ def _fill(stop):
     todo = [row['name'] for row in rows if not os.path.isfile(photoindex.thumb_path(row['name']))]
     _store.update(total=len(rows), have=len(rows) - len(todo), filling=bool(todo))
 
-    def make(name):
+    def ready():
+        """wait for the archive, and for Claude's sequences to be read: they
+        need the drive more than the thumbnails do"""
         while not stop.is_set() and not _archive()['mounted']:
             stop.wait(60)
-        if not stop.is_set() and _image_file(name, 'thumb'):
+        while not stop.is_set() and _asking():
+            stop.wait(5)
+        return not stop.is_set()
+
+    def make(name):
+        if ready() and _image_file(name, 'thumb'):
             _store['have'] += 1
 
     def faces_of(name):
-        while not stop.is_set() and not _archive()['mounted']:
-            stop.wait(60)
-        if not stop.is_set():
+        if ready():
             _faces(name)
 
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -210,13 +223,39 @@ def _fill(stop):
             list(pool.map(faces_of, unseen))
 
 
-def _work(seq, ask):
+def _asking():
+    """whether Claude is being shown a sequence, or is about to be"""
+    with _lock:
+        return bool(_batch['waiting'] or _batch['active']
+                    or any(job.get('state') == 'running' for job in _jobs.values()))
+
+
+def _claim(seq, wait=None):
+    """take the files of a sequence to rewrite them (two writers would undo
+    each other); wait: an Event that ends the wait. False if not taken."""
+    while True:
+        with _lock:
+            if seq not in _writing:
+                _writing.add(seq)
+                return True
+        if wait is None or wait.wait(1):
+            return False
+
+
+def _release(seq):
+    with _lock:
+        _writing.discard(seq)
+
+
+def _work(seq, ask, write=True):
     """the work of the buttons: Claude's description of a sequence (ask),
-    kept in the index, then written into its files; its state goes to _jobs:
-    'running', 'writing' (with the photo as the index now has it, and how
-    many files are written), 'done', or 'error'"""
+    kept in the index, then written into its files (write; the batch leaves
+    that to _resume, so that the sequences are identified at Claude's pace
+    and not at the drive's); its state goes to _jobs: 'running', 'writing'
+    (with the photo as the index now has it, and how many files are
+    written), 'done', or 'error'"""
     from .doc import describe_sequence, write_sequence
-    job = {'state': 'running'}
+    job = {'state': 'running', 'since': time.time()}
 
     def tell(**changes):
         with _lock:
@@ -236,7 +275,12 @@ def _work(seq, ask):
                 seq, progress=lambda done, total: tell(measured=done, frames=total))
             with _lock:
                 _spent['total'] += cost
+        if not write:
+            tell(state='done', photo=photo())
+            _wake.set()
+            return
         tell(state='writing', photo=photo(), written=0, files=0)
+        _claim(seq, threading.Event())          # (waits for _resume to let go of it)
         try:
             write_sequence(seq, progress=lambda done, total: tell(written=done, files=total))
         except Exception as exc:
@@ -244,6 +288,8 @@ def _work(seq, ask):
                  error=("La description est dans la base, mais l'écriture dans les fichiers a "
                         f'échoué : {exc}') if ask else str(exc))
             return
+        finally:
+            _release(seq)
         tell(state='done', photo=photo())
     except Exception as exc:
         tell(state='error', error=str(exc))
@@ -256,23 +302,28 @@ def _batch_add(names):
         return {'error': "Le disque d'archive n'est pas monté : Claude ne peut pas voir les "
                          'séquences.'}
     db = _db()
-    seqs, described = [], 0
+    seqs, described, sizes = [], 0, {}
     for name in names[:5000]:
-        row = db.execute('SELECT seq, described FROM photos WHERE name = ?', (str(name),)).fetchone()
+        row = db.execute('SELECT seq, seq_n, described FROM photos WHERE name = ?',
+                         (str(name),)).fetchone()
         if row is None or not row['seq']:
             continue
         if row['described']:
             described += 1
         elif row['seq'] not in seqs:
             seqs.append(row['seq'])
+            sizes[row['seq']] = row['seq_n'] or 1
     db.close()
     with _lock:
         if not (_batch['waiting'] or _batch['active']):
             # a new batch: the count of the last one is forgotten
-            _batch.update(total=0, done=0, failed=0, note='', finished=[])
+            _batch.update(total=0, done=0, failed=0, note='', finished=[], started=time.time(),
+                          ended=0.0, sizes={}, photos=0, photos_done=0)
         new = [seq for seq in seqs if seq not in _batch['waiting'] and seq not in _batch['active']]
         _batch['waiting'] += new
         _batch['total'] += len(new)
+        _batch['sizes'].update({seq: sizes[seq] for seq in new})
+        _batch['photos'] += sum(sizes[seq] for seq in new)
         start = max(0, min(BATCH_JOBS, len(_batch['waiting'])) - _batch['workers'])
         _batch['workers'] += start
     for _ in range(start):
@@ -296,23 +347,39 @@ def _batch_worker():
                 return
             seq = _batch['waiting'].pop(0)
             _batch['active'].append(seq)
-        _work(seq, True)
+        _work(seq, True, write=False)
         with _lock:
             job = _jobs.get(seq, {})
             _batch['active'].remove(seq)
             _batch['done' if job.get('state') == 'done' else 'failed'] += 1
+            _batch['photos_done'] += _batch['sizes'].get(seq, 1)
             _batch['finished'].append({'seq': seq, 'photo': job.get('photo'),
                                        'error': job.get('error')})
+            if not (_batch['waiting'] or _batch['active']):
+                _batch['ended'] = time.time()
 
 
 def _batch_status(since=0):
     """how the batch goes, with what became of the sequences finished since
-    the `since` first ones"""
+    the `since` first ones: the counts, the seconds it has run, its photos
+    (those of the sequences done, and those read so far of the sequences
+    under way), what each sequence under way is at, and the writing into
+    the files that follows"""
     with _lock:
+        jobs = [dict({key: _jobs.get(seq, {}).get(key) for key in ('state', 'measured', 'frames')},
+                     seq=seq, photos=_batch['sizes'].get(seq, 1),
+                     seconds=round(time.time() - (_jobs.get(seq, {}).get('since') or time.time())))
+                for seq in _batch['active']]
+        running = bool(_batch['waiting'] or _batch['active'])
         return {'total': _batch['total'], 'done': _batch['done'], 'failed': _batch['failed'],
                 'waiting': len(_batch['waiting']), 'active': len(_batch['active']),
-                'running': bool(_batch['waiting'] or _batch['active']), 'note': _batch['note'],
-                'finished': _batch['finished'][since:], 'next': len(_batch['finished'])}
+                'running': running, 'note': _batch['note'],
+                'finished': _batch['finished'][since:], 'next': len(_batch['finished']),
+                'seconds': round((time.time() if running else _batch['ended'] or time.time())
+                                 - _batch['started']) if _batch['started'] else 0,
+                'photos': _batch['photos'], 'photos_done': _batch['photos_done'],
+                'photos_read': sum(min(job['measured'] or 0, job['photos']) for job in jobs),
+                'jobs': jobs, 'writes': dict(_writes)}
 
 
 def _resume(stop):
@@ -322,16 +389,26 @@ def _resume(stop):
     is there"""
     from .doc import pending_writes, write_sequence
     while not stop.is_set():
-        busy = {seq for seq, job in list(_jobs.items()) if job.get('state') in ('running', 'writing')}
-        for seq in pending_writes() if _archive()['mounted'] else []:
+        _wake.clear()
+        todo = pending_writes() if _archive()['mounted'] else []
+        for count, seq in enumerate(todo):
             if stop.is_set():
                 return
-            if seq not in busy:
-                try:
-                    write_sequence(seq)
-                except Exception:
-                    pass
-        stop.wait(30)
+            busy = _jobs.get(seq, {}).get('state') in ('running', 'writing')
+            if busy or not _claim(seq):
+                continue
+            _writes.update(waiting=len(todo) - count, seq=seq, written=0, files=0)
+            try:
+                write_sequence(seq, progress=lambda done, total: _writes.update(written=done,
+                                                                                files=total))
+                _writes['error'] = ''
+            except Exception as exc:
+                _writes['error'] = f'{seq} : {exc}'
+            finally:
+                _release(seq)
+        _writes.update(waiting=0, seq=None, written=0, files=0)
+        # again when a sequence has just been described, or in half a minute
+        _wake.wait(30)
 
 
 class Handler(BaseHTTPRequestHandler):

@@ -206,7 +206,7 @@ function batchButton() {
     ? `Identifier avec Claude ${count > 1 ? "les " + number(count) + " séquences affichées" : "la séquence affichée"} sans description`
     : "Toutes les séquences affichées sont décrites";
   $("batchGo").title = "Claude regarde en arrière-plan chaque séquence affichée qui n'a pas de description, "
-    + "deux à la fois ; les réponses sont écrites dans la base et dans l'en-tête des fichiers. "
+    + "deux à la fois ; les réponses arrivent dans la page et dans la base, puis sont écrites à la suite dans l'en-tête des fichiers. "
     + "Faites défiler pour en afficher davantage.";
 }
 
@@ -230,6 +230,64 @@ async function batchGo() {
   watchBatch();
 }
 
+// seconds as a clock: 75 -> "1:15", 3700 -> "1 h 01"
+function clock(seconds) {
+  seconds = Math.max(0, Math.round(seconds));
+  const hours = Math.floor(seconds / 3600), minutes = Math.floor((seconds % 3600) / 60);
+  return hours ? `${hours} h ${String(minutes).padStart(2, "0")}` : `${minutes}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+// how far the batch is, like a progress bar in a terminal: the share done,
+// the time it has run, the time left at this pace, then what each sequence
+// under way is at and the writing into the files that follows
+function showBatch(status) {
+  const finished = status.done + status.failed;
+  // (a server started before it timed its batches: this page times what it sees)
+  if (status.running && !batch.t0) Object.assign(batch, { t0: Date.now(), d0: finished });
+  if (!status.running) batch.t0 = 0;
+  const timed = status.seconds !== undefined;
+  const seconds = timed ? status.seconds : batch.t0 ? (Date.now() - batch.t0) / 1000 : 0;
+  // the bar counts photos: those of the sequences done, and half of those read
+  // of the sequences under way (Claude has yet to look at them)
+  let share, left = null;
+  if (status.photos) {
+    const made = status.photos_done + 0.5 * (status.photos_read || 0);
+    share = Math.min(1, made / status.photos);
+    if (made > 0 && seconds >= 20) left = seconds * (status.photos - made) / made;
+  } else {
+    const seen = finished - (batch.d0 || 0);        // finished while this page was watching
+    share = status.total ? finished / status.total : 0;
+    if (seen > 0) left = seconds * (status.total - finished) / seen;
+  }
+  $("batchBar").hidden = !status.running;
+  $("batchFill").style.width = (100 * share).toFixed(1) + "%";
+  const failed = status.failed ? `, ${plural(status.failed, "échec", "échecs")}` : "";
+  const parts = status.running
+    ? [`Claude en arrière-plan : ${finished} sur ${plural(status.total, "séquence", "séquences")}${failed}`,
+       Math.round(100 * share) + " %",
+       seconds ? clock(seconds) + (timed ? " écoulées" : " de suivi") : "",
+       left === null ? "temps restant : encore inconnu" : "reste environ " + clock(left),
+       finished && timed ? Math.round(seconds / finished) + " s par séquence" : ""]
+    : [`Identification terminée : ${status.done} sur ${plural(status.total, "séquence", "séquences")}${failed}`,
+       timed && seconds ? "en " + clock(seconds) : ""];
+  $("batchStatus").textContent = !status.total && !status.note ? ""
+    : parts.filter(Boolean).join(" · ") + "." + (status.note ? " " + status.note : "");
+  const lines = (status.jobs || []).map((job) => {
+    const reading = job.frames && job.measured < job.frames;
+    return `▸ ${job.seq} · ${plural(job.photos, "vue", "vues")} · `
+      + (reading ? `lecture des vues ${job.measured} sur ${job.frames}` : "Claude regarde la séquence")
+      + ` · ${clock(job.seconds)}`;
+  });
+  const writes = status.writes || {};
+  if (writes.seq) {
+    lines.push(`Écriture dans les fichiers : ${writes.files ? `fichier ${writes.written} sur ${writes.files}` : "début"} de ${writes.seq}`
+      + (writes.waiting > 1 ? `, puis ${plural(writes.waiting - 1, "séquence", "séquences")}` : "") + ".");
+  }
+  if (writes.error) lines.push("Écriture en échec, elle sera reprise : " + writes.error);
+  if (status.running && !status.jobs) lines.push("Ce serveur date d'avant le suivi détaillé : relancez `patchdoc gui` pour voir ce que fait chaque séquence.");
+  $("batchJobs").textContent = lines.join("\n");
+}
+
 async function watchBatch() {
   clearTimeout(batch.timer);
   let status;
@@ -248,14 +306,10 @@ async function watchBatch() {
   }
   batch.since = status.next;
   $("batchStop").hidden = !status.running;
-  const failed = status.failed ? `, ${plural(status.failed, "échec", "échecs")}` : "";
-  $("batchStatus").textContent = !status.total && !status.note ? ""
-    : (status.running
-      ? `Claude en arrière-plan : ${status.done + status.failed} sur ${plural(status.total, "séquence", "séquences")}${failed}, ${status.active} en cours.`
-      : `Identification terminée : ${status.done} sur ${plural(status.total, "séquence", "séquences")}${failed}.`)
-      + (status.note ? " " + status.note : "");
+  showBatch(status);
   if (status.finished.length || !status.running) batchButton();
-  if (status.running) batch.timer = setTimeout(watchBatch, 3000);
+  // (the files are still being written after the last sequence is identified)
+  if (status.running || (status.writes && status.writes.seq)) batch.timer = setTimeout(watchBatch, 2000);
 }
 
 function totals(sums) {

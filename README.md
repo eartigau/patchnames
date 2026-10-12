@@ -349,7 +349,8 @@ l'appel à Claude le demandent.
   en arrière-plan, celle de chaque séquence, les plus récentes d'abord ; la
   page dit où il en est (`patchdoc gui --no-vignettes` ou la config
   `gui_fill_thumbs` pour s'en passer). `patchdoc vignettes` fait la même
-  chose sans la page.
+  chose sans la page. Les vignettes attendent pendant que Claude identifie
+  des séquences, pour lui laisser le disque.
 - **« Identifier la séquence avec Claude ».** Dans la visionneuse, ce bouton
   montre la séquence à Claude là où sont ses fichiers (la vue du milieu,
   l'agrandissement au point de mise au point, une planche de douze vues au
@@ -357,8 +358,9 @@ l'appel à Claude le demandent.
   dans la page et dans la base, puis elle est écrite dans l'en-tête de
   chaque fichier de la séquence, avec le lieu et la position de la liste.
   Pour une rafale d'oiseau, chaque vue est d'abord lue sur le disque
-  d'archive pour être notée (la page dit où elle en est) : environ 4 s par
-  vue sur un disque réseau, mesuré sur six vues.
+  d'archive pour être notée (la page dit où elle en est), quatre vues à la
+  fois : 1,6 à 3,8 s par vue mesurées sur un disque réseau occupé, là où
+  une lecture vue par vue en prenait environ 7.
   Sur un disque réseau, cette écriture récrit chaque fichier et peut prendre
   des minutes pour une longue rafale ; la page dit où elle en est, et une
   écriture coupée par l'arrêt du serveur reprend à son prochain démarrage.
@@ -367,8 +369,15 @@ l'appel à Claude le demandent.
 - **Tout ce qui est affiché, en arrière-plan.** Au-dessus des résultats, un
   bouton fait la même chose pour toutes les séquences affichées qui n'ont
   pas de description, deux à la fois ; un premier clic dit combien d'appels
-  à Claude le second lancera. Le travail continue si la page est fermée, la
-  page dit où il en est et peut l'arrêter.
+  à Claude le second lancera. Le travail continue si la page est fermée, et
+  la page peut l'arrêter. Elle dit où il en est comme une barre de
+  progression de terminal : la part faite (comptée en photos), le temps
+  écoulé, le temps restant à ce rythme, et pour chaque séquence en cours ce
+  qui se passe (« lecture des vues 7 sur 11 », « Claude regarde la
+  séquence »). Les réponses arrivent dans la page et dans la base au rythme
+  de Claude ; l'écriture dans les fichiers, que le disque réseau rend bien
+  plus lente, suit à part, une séquence après l'autre, avec sa propre ligne
+  (« fichier 6 sur 11 »). Elle reprend toute seule si la page est relancée.
 - **« Écrire dans les fichiers ».** Le bouton voisin fait seulement la
   seconde étape, sans appeler Claude : il écrit dans les fichiers ce que la
   base sait déjà de la séquence. Pour une séquence jamais décrite mais prise

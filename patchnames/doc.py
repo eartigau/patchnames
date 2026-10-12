@@ -89,6 +89,9 @@ GPS_MARK = 'eBird'
 #:  the focus point, EYE_SHEET to a sheet, to judge the focus on the eye
 TILE_CUT, TILE, TILES, RATED = (1400, 933), (350, 233), 16, 96
 EYE, EYE_SHEET, EYES = 512, 6, 12
+#: frames of a burst read from the archive at the same time: a network drive
+#:  answers slowly, and mostly waits
+READS = 4
 #: a frame whose eye Claude did not see at full resolution: the note of one it
 #:  saw, less this much each time the sharpness measured at the focus point
 #:  halves
@@ -225,6 +228,26 @@ def read_exif(paths, fast=False):
     out = subprocess.run(cmd + list(paths), capture_output=True, text=True).stdout
     rows = json.loads(out) if out.strip() else []
     return {row['SourceFile']: row for row in rows}
+
+
+def read_frame(path):
+    """the tags of a photo and its picture at full size, (dict, PIL image),
+    in one exiftool call: on a network drive each visit to a file costs
+    more than what it brings back"""
+    import base64
+    import io
+    from PIL import Image, ImageOps
+    out = subprocess.run(['exiftool', '-j', '-q', '-b', '-JpgFromRaw'] + FIELDS + [path],
+                         capture_output=True, text=True).stdout
+    row = (json.loads(out) or [{}])[0] if out.strip() else {}
+    raw = row.pop('JpgFromRaw', None)
+    try:
+        img = ImageOps.exif_transpose(
+            Image.open(io.BytesIO(base64.b64decode(raw[len('base64:'):])))).convert('RGB')
+    except Exception:
+        # not a raw file, or one without a full-size picture inside
+        img = _image(path, big=True)
+    return row, img
 
 
 def _strings(value):
@@ -647,42 +670,53 @@ def _sheet(pictures, columns, size):
     return sheet
 
 
-def burst_pictures(names, load, rows, tmpdir, index, keep=None, progress=None):
+def burst_pictures(names, load, rows, tmpdir, index, keep=None, progress=None, jobs=1):
     """the pictures of a burst of bird photos for Claude: its sharpest frame
     at 1400 px and the crop of that frame at full resolution around its focus
     point, to say what it shows; the sheets "vues", every frame cut around
     its own focus point and reduced; and the sheets "yeux", the EYES
     sharpest frames at full resolution around their focus point.
 
-    Each frame is loaded once at full size (load(name) -> a PIL image), which
-    also gives its sharpness; one that cannot be read is left out. Returns
+    Each frame is loaded once at full size (load(name) -> a PIL image; it
+    may fill rows[name] on the way), `jobs` at a time, which also gives its
+    sharpness; one that cannot be read is left out. Returns
     the paths and what frame_notes needs: {'sharp': {name: sharpness},
     'shown': the sharpest frame, 'rated': the frames of the sheets "vues",
     'eyes': those of the sheets "yeux"}; raises RuntimeError when no frame
     can be read."""
-    sharp, tiles, squares, shown, full, size = {}, {}, {}, None, None, None
-    for k, name in enumerate(names):
+    sharp, tiles, squares = {}, {}, {}
+    best, lock = {'name': None, 'img': None, 'size': None, 'read': 0}, threading.Lock()
+
+    def measure(name):
         try:
             img = load(name)
+            row = rows.get(name, {})
+            value, tile, square = sharpness(img, row), _cut(img, row, TILE_CUT), _cut(img, row,
+                                                                                    (EYE, EYE))
+            tile.thumbnail(TILE)
         except Exception:
             img = None
-        # (a file read badly gives a smaller preview: its sharpness would not
-        #   compare with the others')
-        size = size or (img.size if img is not None else None)
-        if img is not None and sorted(img.size) == sorted(size):
-            row = rows.get(name, {})
-            sharp[name] = sharpness(img, row)
-            tiles[name] = _cut(img, row, TILE_CUT)
-            tiles[name].thumbnail(TILE)
-            squares[name] = _cut(img, row, (EYE, EYE))
-            if len(squares) > EYES:
-                del squares[min(squares, key=sharp.get)]
-            if keep:
-                keep(name, img, False)
-            if shown is None or sharp[name] > sharp[shown]:
-                shown, full = name, img
-        if progress:
-            progress(k + 1, len(names))
+        with lock:
+            # (a file read badly gives a smaller preview: its sharpness would
+            #   not compare with the others')
+            best['size'] = best['size'] or (sorted(img.size) if img is not None else None)
+            if img is not None and sorted(img.size) == best['size']:
+                sharp[name], tiles[name], squares[name] = value, tile, square
+                if len(squares) > EYES:
+                    del squares[min(squares, key=sharp.get)]
+                if best['name'] is None or value > sharp[best['name']]:
+                    best['name'], best['img'] = name, img
+            else:
+                img = None
+            best['read'] += 1
+            if progress:
+                progress(best['read'], len(names))
+        if keep and img is not None:
+            keep(name, img, False)
+
+    with ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
+        list(pool.map(measure, names))
+    shown, full = best['name'], best['img']
     if shown is None:
         raise RuntimeError('aucune vue de la séquence ne peut être lue')
     if keep:
@@ -1512,19 +1546,26 @@ def describe_sequence(seq_id, model=None, effort=None, sheet=12, progress=None):
     with tempfile.TemporaryDirectory() as tmpdir:
         if bird and len(frames) > 1:
             # a burst: the focus point and the full image of every frame
-            where = {frame['name']: photoindex.resolve(frame['path']) for frame in frames}
-            found = read_exif([path for path in where.values() if path])
-            for name, path in where.items():
-                if path and path in found:
-                    exifs[name] = found[path]
-                    rows[name] = dict(rows.get(name, {}), **found[path])
+            folder = os.path.dirname(full)
+            # (the frames next to the middle one are where it is: no need to
+            #   ask the drive for each)
+            where = {frame['name']: os.path.join(folder, os.path.basename(frame['path']))
+                     if os.path.dirname(frame['path']) == os.path.dirname(middle['path'])
+                     else photoindex.resolve(frame['path']) for frame in frames}
 
             def load(name):
-                return _image(where[name], big=True)
+                row, img = read_frame(where[name])
+                exifs[name] = row
+                rows[name] = dict(rows.get(name, {}), **row)
+                return img
+
+            if progress:
+                progress(0, len(names))
 
             images, seq['burst'] = burst_pictures(
                 names, load, rows, tmpdir, 0,
-                lambda name, img, big: photoindex.save_images(img, name, preview=big), progress)
+                lambda name, img, big: photoindex.save_images(img, name, preview=big), progress,
+                jobs=READS)
         else:
             images = _archive_pictures(frames, full, tmpdir, rows[middle['name']], sheet)
         if not bird and faces.available():
