@@ -99,6 +99,10 @@ READS, FRAMES = 4, 3
 SOFTER = 1.0
 #: keyword of the best frame of a burst
 BEST = 'meilleure vue'
+#: keyword of an identification the photographer checked himself, and what a
+#:  bird he could not name is called (its title, its keyword)
+VERIFIED = 'identification vérifiée'
+UNKNOWN_TITLE, UNKNOWN = 'Oiseau indéterminé', 'indéterminé'
 #: the notes of a bird photo, 1 to 5: column of the index, key of Claude's
 #:  answer, name in the Lightroom hierarchy (Qualité|...), keyword
 NOTES = (('eye', 'oeil_net', 'Œil net', 'œil net'), ('clear', 'degage', 'Dégagement', 'dégagé'),
@@ -498,6 +502,8 @@ def file_tags(answer, kept, checklist, position=True):
         marks = [(label, stem, kept.get(column)) for column, _, label, stem in NOTES
                  if kept.get(column)]
         best = [BEST] if kept.get('best') else []
+        if kept.get('verified'):
+            words.append(VERIFIED)
         answer['autres_mots_cles'] = (words + [f'{stem} {n}/5' for _, stem, n in marks] + best
                                       + people)
         answer['hierarchie'] = ([f'Qualité|{label}|{n}' for label, _, n in marks]
@@ -566,7 +572,7 @@ def from_file(row):
     topic = (under('Sujet') or [''])[0]
     people = under('Personne') or _strings(row.get('PersonInImage'))
     notes = dict(item.rsplit('|', 1) for item in under('Qualité') if '|' in item)
-    known = set(species + latin + habitat + people + [topic, UNSURE, OFFLIST, BEST]
+    known = set(species + latin + habitat + people + [topic, UNSURE, OFFLIST, BEST, VERIFIED]
                 + [f'{stem} {n}/5' for _, _, _, stem in NOTES for n in range(1, 6)])
     description, _, note = str(row.get('Description') or '').partition(' [eBird : ')
     event = str(row.get('Event') or '')
@@ -580,6 +586,10 @@ def from_file(row):
            **{column: _note(notes.get(label)) for column, _, label, _ in NOTES},
            'best': int('Meilleure vue' in under('Qualité')),
            'described': 'file', 'written': 'file'}
+    if VERIFIED in subject:
+        # (what was said before the photographer checked is not in the file)
+        out['verified'] = out['species'] or UNKNOWN
+        out['certainty'] = 'sûre' if species else ''
     if event.startswith('eBird S'):
         out['checklist'] = event.split()[1]
     if OFFLIST in subject:
@@ -974,6 +984,14 @@ def prompt_for(seq, images, rows, instructions):
         kind = BIRD.format(focal=f'{focal:.0f}')
     else:
         kind = OTHER.format(focal=f' ({focal:.0f} mm)' if focal else '')
+    if seq.get('given') is not None:
+        # the photographer checked the identification in the search page
+        kind += ("\nLe photographe a vérifié lui-même l'identification : "
+                 + (', '.join(f'{fr} ({la})' if la else fr for fr, la in seq['given'])
+                    or "l'oiseau ne peut pas être déterminé")
+                 + ". Tiens-la pour acquise : ne propose aucune autre espèce, mets exactement "
+                   'cela dans "especes" ([] pour un oiseau indéterminé) et décris la photo en '
+                   'conséquence, sans décrire des caractères que tu ne vois pas.')
     if seq.get('people') or seq.get('guessed'):
         # the names come from faces.py, on this machine; Claude does not
         #   recognise anybody
@@ -1647,11 +1665,15 @@ def describe_sequence(seq_id, model=None, effort=None, sheet=12, progress=None):
                             + frame['taken'][10:19]} for frame in frames if frame['taken']}
     exif = read_exif([full]).get(full, {})
     rows[middle['name']] = dict(rows.get(middle['name'], {}), **exif)
-    stored = db.execute('SELECT bird, clock_offset FROM photos WHERE name = ?',
-                        (middle['name'],)).fetchone()
+    stored = db.execute('SELECT bird, clock_offset, verified, species, latin FROM photos '
+                        'WHERE name = ?', (middle['name'],)).fetchone()
     bird = _focal(exif) > cfg['bird_focal_min'] if _focal(exif) else bool(stored['bird'])
     seq = {'names': names, 'camera': str(exif.get('Model') or ''), 'bird': bird,
            'when': _when(rows[middle['name']]), 'zone': _zone(exif)}
+    if stored['verified'] is not None:
+        # the species the photographer checked himself: Claude describes, it
+        #   does not identify again
+        seq['given'] = _pairs(stored['species'], stored['latin'])
     data = _ebird.load()
     # the clock offset the index found with the days around is kept
     locate([seq], data, rows, clock=stored['clock_offset'] or 0.0)
@@ -1700,6 +1722,10 @@ def describe_sequence(seq_id, model=None, effort=None, sheet=12, progress=None):
         answer, cost = ask_claude(prompt_for(seq, images, rows, explanations), tmpdir,
                                   model or cfg.get('keywords_model'),
                                   effort or cfg.get('doc_effort'))
+        if seq.get('given') is not None:
+            answer.update(_named(seq['given']), note_ebird='')
+            answer['autres_mots_cles'] = [word for word in answer.get('autres_mots_cles') or []
+                                          if word != UNKNOWN] + [UNKNOWN] * (not seq['given'])
         if seq.get('burst'):
             # a second look, at the eye of each frame at full resolution
             if progress:
@@ -1730,6 +1756,91 @@ def describe_sequence(seq_id, model=None, effort=None, sheet=12, progress=None):
     row = dict(db.execute('SELECT * FROM photos WHERE seq = ? AND rep = 1', (seq_id,)).fetchone())
     db.close()
     return row, cost
+
+
+def _pairs(species, latin):
+    """the species of a sequence as the index keeps them, [(French, Latin)]"""
+    names = [part for part in (species or '').split(photoindex.SEP) if part]
+    latins = [part for part in (latin or '').split(photoindex.SEP)]
+    return list(zip(names, latins + [''] * len(names)))
+
+
+def _named(pairs):
+    """the part of an answer that names these species: title, species and
+    how sure (the photographer's word: sure)"""
+    return {'titre': ', '.join(f'{fr} ({la})' if la else fr for fr, la in pairs) or UNKNOWN_TITLE,
+            'especes': [{'francais': fr, 'latin': la} for fr, la in pairs], 'certitude': 'sûre'}
+
+
+def correct_species(seq_id, old, new):
+    """The photographer sets an identification right, in the search page: in
+    a sequence, the species `old` (its French name; '' to add one to a
+    sequence that names none) becomes `new` (a French name; '' for a bird
+    that cannot be named; the same as `old` to confirm it). The Latin name
+    comes from the eBird checklist of the sequence, or from any other. The
+    title is made again, a description written for another species gives
+    way to a plain line, and the files wait for write_sequence. Returns the
+    row of the sequence."""
+    db = photoindex.connect()
+    try:
+        row = db.execute('SELECT * FROM photos WHERE seq = ? AND rep = 1', (seq_id,)).fetchone()
+        if row is None:
+            raise RuntimeError('séquence inconnue')
+        pairs = _pairs(row['species'], row['latin'])
+        old, new = ' '.join((old or '').split()), ' '.join((new or '').split())
+        at = next((k for k, (fr, _) in enumerate(pairs)
+                   if photoindex.fold(fr) == photoindex.fold(old)), None)
+        was = pairs[at] if at is not None else None
+        pair = None
+        if new:
+            found = (db.execute('SELECT francais, latin FROM observations WHERE sid = ? AND '
+                                'francais = ? COLLATE NOCASE', (row['checklist'], new)).fetchone()
+                     or db.execute('SELECT francais, latin FROM observations WHERE francais = ? '
+                                   'COLLATE NOCASE LIMIT 1', (new,)).fetchone())
+            pair = (found['francais'], found['latin'] or '') if found else (new, '')
+        if at is None:
+            pairs += [pair] if pair else []
+        elif pair:
+            pairs[at] = pair
+        else:
+            del pairs[at]
+        pairs = list(dict.fromkeys(pairs))
+
+        named = _named(pairs)
+        # a description written for another bird argues for it: it gives way to
+        #   a plain line, until Claude describes the sequence again knowing
+        #   the species (a confirmation leaves it alone)
+        description = row['description'] or ''
+        if pair != was:
+            description = (f"{named['titre']}. Identification corrigée par le photographe"
+                           + (f' (proposée d\'abord : {was[0]})' if was else '') + '.')
+        words = [word for word in (row['keywords'] or '').split(photoindex.SEP)
+                 if word and word != UNKNOWN and photoindex.fold(word) not in
+                 {photoindex.fold(name) for name in (was or ()) if name}]
+        listed = None
+        if row['checklist'] and row['match'] in ('inside', 'other'):
+            class Listed:
+                names = [found['latin'] for found in db.execute(
+                    'SELECT latin FROM observations WHERE sid = ?', (row['checklist'],))]
+
+                def latin_names(self):
+                    return self.names
+            listed = Listed()
+        changes = {
+            'title': named['titre'], 'species': photoindex.SEP.join(fr for fr, _ in pairs),
+            'latin': photoindex.SEP.join(la for _, la in pairs),
+            'topic': row['topic'] or 'oiseau', 'description': description or named['titre'],
+            'certainty': 'sûre' if pairs else '',
+            'keywords': photoindex.SEP.join(words + [UNKNOWN] * (not pairs)),
+            'on_checklist': _on_list([la for _, la in pairs], listed), 'note': '',
+            # (what was said first stays, whatever is corrected afterwards)
+            'verified': row['verified'] or (was[0] if was else UNKNOWN),
+            'written': 'pending'}
+        names = [frame['name'] for frame in photoindex.sequence(db, seq_id)]
+        photoindex.put(db, [dict(changes, name=name) for name in names])
+        return dict(db.execute('SELECT * FROM photos WHERE seq = ? AND rep = 1', (seq_id,)).fetchone())
+    finally:
+        db.close()
 
 
 def write_sequence(seq_id, progress=None, chunk=6):

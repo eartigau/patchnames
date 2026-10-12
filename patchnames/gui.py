@@ -588,7 +588,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.headers.get('X-Patchdoc') != '1' or self.path not in (
                 '/api/reveal', '/api/open', '/api/describe', '/api/write', '/api/batch',
                 '/api/batch/stop', '/api/face', '/api/pano', '/api/archive/use', '/api/sync',
-                '/api/sync/stop'):
+                '/api/sync/stop', '/api/species'):
             self._send(403, {'error': 'refusé'})
             return
         try:
@@ -619,6 +619,25 @@ class Handler(BaseHTTPRequestHandler):
                         self._send(200, dict(_copies(), error='Une copie est déjà en cours.'))
                         return
                 self._send(200, _copies())
+                return
+            if self.path == '/api/species':
+                # the photographer sets an identification right
+                from .doc import correct_species
+                db = _db()
+                row = db.execute('SELECT seq FROM photos WHERE name = ?',
+                                 (str(body.get('name')),)).fetchone()
+                db.close()
+                if row is None or not row['seq']:
+                    self._send(200, {'error': 'photo inconnue'})
+                    return
+                try:
+                    fixed = correct_species(row['seq'], str(body.get('old') or ''),
+                                            str(body.get('new') or ''))
+                except RuntimeError as exc:
+                    self._send(200, {'error': str(exc)})
+                    return
+                _wake.set()         # (the files of the sequence are to be written again)
+                self._send(200, {'photo': _public(fixed)})
                 return
             if self.path == '/api/pano':
                 from .doc import panorama_of

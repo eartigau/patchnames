@@ -387,6 +387,17 @@ l'appel à Claude le demandent.
   de Claude ; l'écriture dans les fichiers, que le disque réseau rend bien
   plus lente, suit à part, une séquence après l'autre, avec sa propre ligne
   (« fichier 6 sur 11 »). Elle reprend toute seule si la page est relancée.
+- **Corriger une identification.** Dans la visionneuse, sous « Espèces »,
+  chaque espèce d'une séquence a un choix : une autre espèce de sa liste
+  eBird, « Indéterminé », ou « + autre espèce… » pour en taper une (son nom
+  latin vient de vos données eBird). « Confirmer » dit qu'une identification
+  incertaine était juste. Dans tous les cas c'est votre parole : la
+  séquence devient « identification vérifiée » (un mot-clé dans les
+  fichiers aussi), le titre est refait, « sur la liste » est revu, et les
+  fichiers sont récrits. Une description écrite pour une autre espèce est
+  remplacée par une ligne neutre ; « Identifier de nouveau avec Claude » la
+  refait alors en tenant votre espèce pour acquise, sans la remettre en
+  cause.
 - **« Écrire dans les fichiers ».** Le bouton voisin fait seulement la
   seconde étape, sans appeler Claude : il écrit dans les fichiers ce que la
   base sait déjà de la séquence. Pour une séquence jamais décrite mais prise

@@ -44,6 +44,8 @@ COLUMNS = ('name', 'path', 'stem', 'ext',
            'seq', 'seq_n', 'rep',
            'title', 'topic', 'description', 'species', 'latin', 'habitat', 'keywords',
            'certainty',
+           'verified',         # the photographer checked the identification himself: what was
+                               #   said before he did; NULL if he never did
            'eye', 'clear', 'level',    # a bird photo, 1 to 5: the focus on the eye, how
                                        #   clear of branches the bird is, how close to eye level
            'sharp', 'best',            # in a burst: the sharpness measured at the focus point

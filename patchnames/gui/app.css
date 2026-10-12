@@ -502,6 +502,10 @@
   min-width: 0;
 }
 
+.fix p {
+  margin: 4px 0 6px;
+}
+
 .who .born {
   width: 4.6em;
   flex: none;

@@ -15,7 +15,8 @@ const state = { items: [], offset: 0, done: false, loading: false, token: 0, cur
                 frames: [] };
 // (state.names: the names offered for a face, those the photographer starts
 // with and those given so far)
-const NEW = "\u0000nouveau";      // the choice "ajouter un nom" of a face
+const NEW = "\u0000nouveau";      // the choice "ajouter un nom" of a face, "autre espèce" of a species
+const UNKNOWN = "\u0000indéterminé";       // the choice of a bird that cannot be named
 // the notes of a bird photo, 1 to 5: column of the index, what the page calls it
 const NOTES = [["eye", "œil net"], ["clear", "dégagé"], ["level", "hauteur d'œil"]];
 // the batch of the button above the results: how many finished sequences
@@ -706,6 +707,68 @@ async function work(photo, what) {
   }
 }
 
+// the identification set right by the photographer: for each species of the
+// sequence, another one of its eBird checklist, any other species, or a bird
+// that cannot be named; "Confirmer" when Claude was right but not sure
+function speciesRows(photo) {
+  const box = el("div", { class: "fix" });
+  const index = state.items.indexOf(photo), species = split(photo.species);
+  const send = async (old, name) => {
+    const reply = await post("/api/species", { name: photo.name, old, new: name });
+    if (reply.error || !reply.photo) {
+      box.append(el("p", { class: "mono", text: reply.error === "refusé"
+        ? "Ce serveur date d'avant cette fonction : arrêtez-le (Ctrl-C) et relancez `patchdoc gui`."
+        : reply.error || "La correction a échoué." }));
+      return;
+    }
+    Object.assign(photo, reply.photo);
+    refresh(index);
+    batchButton();
+  };
+  const fill = (listed) => box.replaceChildren(
+    el("p", { class: "mono", text: photo.verified
+      ? "Identification vérifiée par vous" + (photo.verified !== photo.species
+          ? ` (proposée d'abord : ${photo.verified}). « Identifier de nouveau avec Claude » refait la description pour cette espèce` : "")
+        + ". Pour la changer :"
+      : species.length ? "Si l'identification est fausse, la corriger :" : "Nommer l'oiseau :" }),
+    ...(species.length ? species : [""]).map((name) => {
+      const others = listed.filter((other) => other !== name);
+      const typed = el("input", { class: "field", list: "speciesList", placeholder: "nom français de l'espèce", hidden: "hidden",
+                                  "aria-label": "Autre espèce" });
+      const choice = el("select", { class: "field", "aria-label": "Corriger l'espèce " + name },
+        el("option", { value: name, text: name || "quelle espèce ?" }),
+        others.length && el("optgroup", { label: "Sur la liste eBird de la séquence" },
+          others.map((other) => el("option", { value: other, text: other }))),
+        (name || photo.title) && el("option", { value: UNKNOWN, text: "Indéterminé" }),
+        el("option", { value: NEW, text: "+ autre espèce…" }));
+      const back = () => { typed.hidden = true; choice.hidden = false; choice.value = name; };
+      choice.addEventListener("change", () => {
+        if (choice.value === UNKNOWN) return send(name, "");
+        if (choice.value !== NEW) return send(name, choice.value);
+        choice.hidden = true;
+        typed.hidden = false;
+        typed.focus();
+      });
+      typed.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" && typed.value.trim()) send(name, typed.value.trim());
+        if (event.key !== "Escape") return;
+        event.stopPropagation();
+        typed.value = "";
+        back();
+      });
+      typed.addEventListener("blur", () => { if (!typed.value.trim() && choice.hidden) back(); });
+      return el("div", { class: "who" }, choice, typed,
+        name && !photo.verified && el("button", { class: "pill", type: "button", text: "Confirmer",
+          title: "L'identification est juste : la marquer comme vérifiée par vous", onclick: () => send(name, name) }));
+    }));
+  fill([]);
+  if (photo.checklist) {
+    fetch("/api/checklist?sid=" + encodeURIComponent(photo.checklist)).then((reply) => reply.json())
+      .then((list) => fill((list.species || []).map((sp) => sp.francais))).catch(() => {});
+  }
+  return box;
+}
+
 async function listSpecies(photo, box) {
   if (box.childElementCount) {
     box.replaceChildren();
@@ -729,7 +792,9 @@ async function listSpecies(photo, box) {
 function info(photo) {
   const out = [el("h2", { text: photo.title || "Pas encore décrite" })];
   const badges = [];
-  if (photo.species && photo.certainty) {
+  if (photo.verified) {
+    badges.push(badge("identification vérifiée par vous", "good"));
+  } else if (photo.species && photo.certainty) {
     badges.push(badge("identification : " + photo.certainty, photo.certainty === "sûre" ? "good" : "warn"));
   }
   if (photo.on_checklist === 1) badges.push(badge("sur la liste eBird", "good"));
@@ -784,10 +849,14 @@ function info(photo) {
   }
 
   const species = split(photo.species), latin = split(photo.latin);
-  if (species.length) {
-    out.push(el("h3", { text: "Espèces" }), el("div", { class: "chips" }, species.map((name, k) =>
-      el("span", { class: "chip", text: latin[k] ? `${name} (${latin[k]})` : name, title: "Toutes les photos de cette espèce",
-                   onclick: () => setFilter({ species: name }) }))));
+  if (species.length || photo.bird || photo.topic === "oiseau") {
+    out.push(el("h3", { text: "Espèces" }));
+    if (species.length) {
+      out.push(el("div", { class: "chips" }, species.map((name, k) =>
+        el("span", { class: "chip", text: latin[k] ? `${name} (${latin[k]})` : name, title: "Toutes les photos de cette espèce",
+                     onclick: () => setFilter({ species: name }) }))));
+    }
+    out.push(speciesRows(photo));
   }
   const words = [...split(photo.habitat), ...split(photo.keywords)];
   if (words.length) {
