@@ -12,6 +12,12 @@ DEFAULTS = {
     # other places the same archive may be mounted at (the drive plugged in
     #   directly, another network mount): the first one that is there is used
     'photo_archive_mounts': [],
+    # how rsync reaches a copy of the archive that is on a server, without
+    #   going through its mount: {"~/mnt/URUBU/photo": "user@host:/path/photo"}
+    #   (a copy mounted with sshfs is found without it while it is mounted)
+    'photo_archive_remotes': {},
+    # the copy to use when several are there (the search page sets it)
+    'photo_archive_use': None,
     'dng_converter': '/Applications/Adobe DNG Converter.app/Contents/MacOS/Adobe DNG Converter',
     'extensions': ['*.NEF', '*.JPG', '*.HEIC', '*.MP4', '*.DNG', '*.MOV', '*.DCM', '*.PSD'],
     'camera_owners': {
@@ -69,11 +75,31 @@ def load():
 
 
 def archive_roots(cfg=None):
-    """the places the archive may be mounted at: 'photo_archive_root', then
-    each of 'photo_archive_mounts'"""
+    """the places the archive may be at: 'photo_archive_root', then each of
+    'photo_archive_mounts' (the same archive mounted elsewhere, or a copy of
+    it on another drive); the one chosen in the search page,
+    'photo_archive_use', comes first"""
     cfg = cfg or load()
     places = [cfg['photo_archive_root']] + list(cfg.get('photo_archive_mounts') or [])
-    return [os.path.expanduser(place).rstrip(os.sep) for place in places if place]
+    roots = [os.path.expanduser(place).rstrip(os.sep) for place in places if place]
+    chosen = os.path.expanduser(cfg.get('photo_archive_use') or '').rstrip(os.sep)
+    return sorted(roots, key=lambda root: root != chosen)
+
+
+def save(changes):
+    """keep these keys in the config file and leave the others as they are
+    (the file is made if there is none)"""
+    cfg = {}
+    if CONFIG_PATH.exists():
+        with open(CONFIG_PATH) as f:
+            cfg = json.load(f)
+    cfg.update(changes)
+    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = CONFIG_PATH.with_name(CONFIG_PATH.name + '.tmp')
+    with open(tmp, 'w') as f:
+        json.dump(cfg, f, indent=2, ensure_ascii=False)
+        f.write('\n')
+    os.replace(tmp, CONFIG_PATH)
 
 
 def archive_root(cfg=None):

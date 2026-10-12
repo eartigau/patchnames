@@ -59,6 +59,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from . import config as _config_module
 from . import photoindex
+from . import sync
 from .ebird import country_name
 
 STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'gui')
@@ -86,6 +87,10 @@ _batch = {'waiting': [], 'active': [], 'total': 0, 'done': 0, 'failed': 0, 'note
 #:  _writing: the sequences whose files somebody is rewriting
 _writes = {'waiting': 0, 'seq': None, 'written': 0, 'files': 0, 'error': ''}
 _wake, _writing = threading.Event(), set()
+#: the copy of the archive from one of its drives to another (sync.py):
+#:  'idle', 'planning' (rsync compares the two), 'planned' (what it would
+#:  bring), 'running', 'done', 'stopped' or 'error', with the counts
+_sync, _sync_stop = {'state': 'idle'}, threading.Event()
 #: sequences of a batch done at the same time (each reads and rewrites files
 #:  of the archive)
 BATCH_JOBS = 2
@@ -156,6 +161,57 @@ def _archive():
     it is not)"""
     roots = photoindex.roots()
     return {'roots': roots, 'mounted': next((root for root in roots if os.path.isdir(root)), None)}
+
+
+def _copies():
+    """the copies of the archive as the page gets them, and the copy from
+    one to the other if there is one"""
+    state = dict(_sync)
+    if state.get('started'):
+        state['seconds'] = round((state.get('ended') or time.time()) - state['started'])
+    return {'copies': [dict(copy, server=bool(copy['remote'])) for copy in sync.copies()],
+            'sync': state}
+
+
+def _sync_start(src, dst, go):
+    """start comparing two copies of the archive, or copying from one to the
+    other (go); False when a copy is already under way"""
+    with _lock:
+        state = _sync.get('state')
+        if state in ('planning', 'running'):
+            return False
+        # (what was just compared is not compared again before it is copied)
+        known = go and state == 'planned' and (_sync.get('src'), _sync.get('dst')) == (src, dst)
+        if known:
+            _sync.update(state='running')
+        else:
+            _sync.update(state='planning', src=src, dst=dst, from_name=sync.name_of(src),
+                         to_name=sync.name_of(dst), files=0, bytes=0, sent=0, copied=0, pace='',
+                         error='', started=time.time(), ended=0)
+    threading.Thread(target=_sync_job, args=(src, dst, go, known), daemon=True).start()
+    return True
+
+
+def _sync_job(src, dst, go, known):
+    """compare two copies of the archive (what `src` has that is newer than
+    in `dst`, or missing there; known: that was just done), and copy it if
+    asked (go)"""
+    try:
+        if not known:
+            _sync.update(sync.plan(src, dst))
+        if not go or not _sync['files']:
+            _sync.update(state='planned', ended=time.time())
+            return
+        _sync_stop.clear()
+        _sync.update(state='running', started=time.time(), ended=0, sent=0, copied=0, pace='')
+        ended = sync.run(src, dst, stop=_sync_stop,
+                         tell=lambda sent, copied, pace: _sync.update(sent=sent, copied=copied,
+                                                                      pace=pace))
+        _sync.update(state=ended, ended=time.time())
+    except Exception as exc:
+        _sync.update(state='error', error=str(exc), ended=time.time())
+    finally:
+        _wake.set()
 
 
 def _image_file(name, kind):
@@ -392,7 +448,9 @@ def _resume(stop):
     from .doc import pending_writes, write_sequence
     while not stop.is_set():
         _wake.clear()
-        todo = pending_writes() if _archive()['mounted'] else []
+        # (not while the files are being copied from a drive to the other)
+        copying = _sync.get('state') in ('planning', 'running')
+        todo = pending_writes() if _archive()['mounted'] and not copying else []
         for count, seq in enumerate(todo):
             if stop.is_set():
                 return
@@ -511,6 +569,8 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(200, _jobs.get(args.get('id', ''), {'state': 'unknown'}))
             elif url.path == '/api/batch':
                 self._send(200, _batch_status(int(args.get('since') or 0)))
+            elif url.path == '/api/archive':
+                self._send(200, _copies())
             elif url.path == '/api/faces':
                 self._send(200, _faces(os.path.basename(args.get('name', ''))))
             else:
@@ -526,13 +586,38 @@ class Handler(BaseHTTPRequestHandler):
         # a header no other site can send without asking first, and never gets
         if self.headers.get('X-Patchdoc') != '1' or self.path not in (
                 '/api/reveal', '/api/open', '/api/describe', '/api/write', '/api/batch',
-                '/api/batch/stop', '/api/face', '/api/pano'):
+                '/api/batch/stop', '/api/face', '/api/pano', '/api/archive/use', '/api/sync',
+                '/api/sync/stop'):
             self._send(403, {'error': 'refusé'})
             return
         try:
             body = json.loads(self.rfile.read(int(self.headers.get('Content-Length') or 0)))
             if self.path == '/api/batch':
                 self._send(200, _batch_add(list(body.get('names') or [])))
+                return
+            if self.path in ('/api/archive/use', '/api/sync', '/api/sync/stop'):
+                # (the copies of the archive are named by the config, never by the page)
+                roots = photoindex.roots()
+                if self.path == '/api/sync/stop':
+                    _sync_stop.set()
+                    if _sync.get('state') == 'planned':
+                        _sync.update(state='idle')
+                elif self.path == '/api/archive/use':
+                    root = str(body.get('root'))
+                    if root not in roots or not os.path.isdir(root):
+                        self._send(200, dict(_copies(), error="Cette copie de l'archive n'est pas "
+                                                                'branchée.'))
+                        return
+                    _config_module.save({'photo_archive_use': root})
+                else:
+                    src, dst = str(body.get('src')), str(body.get('dst'))
+                    if src not in roots or dst not in roots or src == dst:
+                        self._send(200, dict(_copies(), error='copies inconnues'))
+                        return
+                    if not _sync_start(src, dst, bool(body.get('go'))):
+                        self._send(200, dict(_copies(), error='Une copie est déjà en cours.'))
+                        return
+                self._send(200, _copies())
                 return
             if self.path == '/api/pano':
                 from .doc import panorama_of

@@ -230,7 +230,7 @@
 }
 
 /* how far the batch is: a bar, then what each sequence under way is at */
-.batch .progress {
+.progress {
   flex: 1 1 100%;
   height: 8px;
   border-radius: 999px;
@@ -238,7 +238,7 @@
   overflow: hidden;
 }
 
-.batch .progress div {
+.progress div {
   width: 0;
   height: 100%;
   border-radius: 999px;
@@ -252,6 +252,49 @@
 }
 
 .batch .lines:empty {
+  display: none;
+}
+
+/* the copies of the archive, the one in use, and the copy from one to another */
+.archive {
+  margin-top: 12px;
+  font-size: 0.84rem;
+}
+
+.archive .row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.archive .chips {
+  margin-bottom: 0;
+}
+
+.archive .mono {
+  font-family: "IBM Plex Mono", monospace;
+  color: var(--muted);
+}
+
+.archive .chip.on {
+  color: #6ce2ad;
+  border-color: rgba(108, 226, 173, 0.6);
+  cursor: default;
+}
+
+.archive .chip.off {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.archive .progress {
+  max-width: 720px;
+  margin-bottom: 8px;
+}
+
+.archive p:empty {
   display: none;
 }
 

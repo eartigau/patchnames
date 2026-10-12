@@ -401,6 +401,30 @@ l'appel à Claude le demandent.
   {"photo_archive_root": "~/mnt/URUBU/photo", "photo_archive_mounts": ["/Volumes/URUBU/photo"]}
   ```
 
+- **Deux copies de l'archive.** L'archive peut vivre sur deux disques qui
+  sont la copie l'un de l'autre, par exemple un disque réseau et un disque
+  externe : `photo_archive_root` et `photo_archive_mounts`.
+
+  ```json
+  {"photo_archive_root": "~/mnt/URUBU/photo", "photo_archive_mounts": ["/Volumes/u5tb/photo"]}
+  ```
+
+  Sous le titre, la page montre les copies et celle qu'elle utilise (la
+  première qui est là ; un clic sur une autre copie branchée la choisit, et
+  `patchnames` et `patchdoc` y archivent alors aussi). Les boutons
+  « A → B » et « B → A » portent vers une copie ce que l'autre a de plus
+  récent ou qu'elle n'a pas, avec rsync : la page compare d'abord et dit
+  combien de fichiers et quel volume, vous confirmez, puis une barre suit
+  la copie (fichiers, volume, débit, temps restant) et un bouton l'arrête.
+  Un fichier n'est remplacé que par un plus récent, et rien n'est jamais
+  effacé : faire les deux sens laisse à chaque copie le plus récent de
+  tout. Une copie montée par sshfs est jointe par rsync directement sur son
+  serveur (`rsync -rtuz -e ssh`), ce qui est bien plus rapide qu'à travers
+  le montage ; `photo_archive_remotes`
+  (`{"~/mnt/URUBU/photo": "moi@serveur:/chemin/photo"}`) le dit pour une
+  copie qui n'est pas montée. Une limite : un fichier renommé sur une copie
+  (un fichier sans numéro d'appareil change de nom quand ses étiquettes
+  sont écrites) reste sous son ancien nom sur l'autre.
 - **SQLite plutôt que DuckDB.** La page lit la base pendant que `patchdoc` y
   écrit, ce qu'un fichier DuckDB n'accepte pas entre deux processus, et sa
   recherche plein texte suit chaque ajout. Les colonnes sont typées : DuckDB
@@ -466,6 +490,7 @@ disque est en réseau.
   },
   "bird_lenses": ["200-500mm", "300mm"],
   "photo_archive_mounts": [],
+  "photo_archive_remotes": {},
   "bird_focal_min": 200,
   "doc_budget": 10,
   "people": [],

@@ -313,6 +313,92 @@ async function watchBatch() {
   if (status.running || (status.writes && status.writes.seq)) batch.timer = setTimeout(watchBatch, 2000);
 }
 
+/* ── The copies of the archive: which one is used, and rsync between them ── */
+
+// bytes as a size: 12345678 -> "12,3 Mo"
+function size(bytes) {
+  const units = ["o", "Ko", "Mo", "Go", "To"];
+  let value = Number(bytes || 0), unit = 0;
+  while (value >= 1000 && unit < units.length - 1) { value /= 1000; unit += 1; }
+  return value.toLocaleString("fr-CA", { maximumFractionDigits: value < 100 && unit ? 1 : 0 }) + " " + units[unit];
+}
+
+const archive = { timer: null };
+
+async function archiveDo(path, body) {
+  const reply = await post(path, body);
+  showArchive(reply);
+  return reply;
+}
+
+// the archive lives on drives that are copies of each other: say which one
+// is used (a click on another that is there changes it), and bring to one
+// what the other has that is newer, with how far that copy is
+async function showArchive(data) {
+  clearTimeout(archive.timer);
+  if (!data) {
+    try { data = await (await fetch("/api/archive")).json(); } catch (err) { return; }
+  }
+  if (!data.copies || data.copies.length < 2) return;        // one archive only, or a server from before this
+  $("archive").hidden = false;
+  const job = data.sync || {}, busy = job.state === "planning" || job.state === "running";
+  $("archiveCopies").replaceChildren(...data.copies.map((copy) => el("span", {
+    class: "chip" + (copy.used ? " on" : copy.mounted ? "" : " off"),
+    text: copy.name + (copy.used ? " · utilisée" : copy.mounted ? "" : copy.server ? " · sur le serveur, pas montée" : " · pas branchée"),
+    title: copy.used ? "La page lit et écrit sur cette copie : " + copy.root
+      : copy.mounted ? "Utiliser cette copie : " + copy.root : copy.root,
+    onclick: copy.mounted && !copy.used && !busy
+      ? async () => { const reply = await archiveDo("/api/archive/use", { root: copy.root }); if (!reply.error) location.reload(); }
+      : null,
+  })));
+  // a copy can give or take when it is there, or when rsync can reach its server
+  const there = (copy) => copy.mounted || copy.server;
+  const pairs = data.copies.flatMap((from) => data.copies.filter((to) => to !== from).map((to) => [from, to]));
+  const buttons = busy || job.state === "planned" ? [] : pairs.map(([from, to]) => el("button", {
+    class: "pill", type: "button", disabled: !(there(from) && there(to)) && "disabled",
+    text: `${from.name} → ${to.name}`,
+    title: there(from) && there(to)
+      ? `Comparer, puis copier vers ${to.name} ce que ${from.name} a de plus récent ou que ${to.name} n'a pas ; rien n'est effacé`
+      : `Branchez ${there(from) ? to.name : from.name} pour copier`,
+    onclick: () => archiveDo("/api/sync", { src: from.root, dst: to.root }),
+  }));
+  const pair = `${job.from_name} vers ${job.to_name}`;
+  let text = data.error || "", bar = false;
+  if (job.state === "planning") {
+    text = `Comparaison de ${job.from_name} et de ${job.to_name}… ${clock(job.seconds || 0)}`;
+    buttons.push(el("button", { class: "pill", type: "button", text: "Arrêter", onclick: () => archiveDo("/api/sync/stop") }));
+  } else if (job.state === "planned") {
+    text = job.files
+      ? `${plural(job.files, "fichier", "fichiers")} (${size(job.bytes)}) plus récents ou absents, à copier de ${pair}.`
+      : `Rien à copier de ${pair} : ${job.to_name} a déjà tout ce que ${job.from_name} a de plus récent.`;
+    if (job.files) {
+      buttons.push(el("button", { class: "pill go", type: "button", text: `Copier de ${pair}`,
+                                  onclick: () => archiveDo("/api/sync", { src: job.src, dst: job.dst, go: true }) }));
+    }
+    buttons.push(el("button", { class: "pill", type: "button", text: job.files ? "Annuler" : "D'accord", onclick: () => archiveDo("/api/sync/stop") }));
+  } else if (job.state === "running") {
+    const share = job.bytes ? Math.min(1, job.sent / job.bytes) : job.files ? Math.min(1, job.copied / job.files) : 0;
+    const left = share > 0 && job.seconds >= 10 ? job.seconds * (1 - share) / share : null;
+    bar = true;
+    $("syncFill").style.width = (100 * share).toFixed(1) + "%";
+    text = [`Copie de ${pair} : ${number(job.copied)} sur ${plural(job.files, "fichier", "fichiers")}`,
+            job.bytes ? `${size(job.sent)} sur ${size(job.bytes)}` : "", Math.round(100 * share) + " %", job.pace,
+            clock(job.seconds || 0) + " écoulées", left === null ? "" : "reste environ " + clock(left)].filter(Boolean).join(" · ") + ".";
+    buttons.push(el("button", { class: "pill", type: "button", text: "Arrêter", onclick: () => archiveDo("/api/sync/stop") }));
+  } else if (job.state === "done") {
+    text = `Copie terminée de ${pair} : ${plural(job.files, "fichier", "fichiers")} (${size(job.bytes)}) en ${clock(job.seconds || 0)}.`;
+  } else if (job.state === "stopped") {
+    text = `Copie de ${pair} arrêtée après ${plural(job.copied || 0, "fichier", "fichiers")} ; elle peut être relancée, elle reprendra là.`;
+  } else if (job.state === "error") {
+    text = `La copie de ${pair} a échoué : ${job.error}`;
+  }
+  $("archiveActions").replaceChildren(
+    el("span", { class: "mono", text: busy || job.state === "planned" ? "" : "Copier ce qui est plus récent :" }), ...buttons);
+  $("syncBar").hidden = !bar;
+  $("syncStatus").textContent = text;
+  if (busy) archive.timer = setTimeout(showArchive, 2000);
+}
+
 function totals(sums) {
   const stat = (label, value) =>
     el("div", { class: "stat" }, el("div", { class: "label", text: label }), el("div", { class: "value", text: number(value) }));
@@ -887,6 +973,7 @@ async function start() {
   const at = state.items.findIndex((photo) => photo.name === wanted);
   if (wanted && at >= 0) openViewer(at);
   watchBatch();         // a batch started before the page was opened goes on
+  showArchive();
 }
 
 start().catch((err) => { $("status").textContent = "La page n'a pas pu démarrer : " + err.message; });
