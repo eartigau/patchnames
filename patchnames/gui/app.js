@@ -472,7 +472,8 @@ function tile(photo, index) {
     el("span", {}, photo.seq_n > 1 && el("span", { class: "mark", text: "×" + photo.seq_n })),
     el("span", {},
       unsure && el("span", { class: "mark warn", text: "?" }),
-      photo.on_checklist === 0 && el("span", { class: "mark alert", text: "≠" })));
+      photo.on_checklist === 0 && el("span", { class: "mark alert", text: "≠" }),
+      hasEye(photo) && loupeIcon((event) => loupe(event, photo))));
   const date = (photo.local || photo.taken || "").slice(0, 10);
   const figure = el("figure", { class: "gallery-item", onclick: () => openViewer(index) }, img, marks,
     el("figcaption", {}, photo.title
@@ -483,13 +484,6 @@ function tile(photo, index) {
          el("div", { class: "where", text: [date, photo.location ? region(photo) : ""].filter(Boolean).join(" · ") })]));
   figure.title = [photo.title, photo.description, unsure && "Identification à confirmer",
     photo.on_checklist === 0 && "Espèce absente de la liste eBird"].filter(Boolean).join("\n");
-  if (hasEye(photo)) {
-    // the eye of the bird, once the cursor has stayed a moment on the tile
-    let timer = null, on = false;
-    figure.addEventListener("mouseenter", (event) => { timer = setTimeout(() => { on = true; loupe(event, photo); }, 350); });
-    figure.addEventListener("mousemove", (event) => { if (on) loupe(event, photo); });
-    figure.addEventListener("mouseleave", () => { clearTimeout(timer); on = false; hideLoupe(); });
-  }
   return figure;
 }
 
@@ -513,6 +507,25 @@ function showChecklistChip() {
 /* ── The loupe: the eye of a bird at full resolution, under the cursor ── */
 
 const hasEye = (item) => Boolean(item) && item.eye_x !== null && item.eye_x !== undefined;
+const LOUPE_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true">'
+  + '<circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.6 15.6 21 21"/></svg>';
+
+// a small magnifier on a photo whose eye is known. The loupe only comes up
+// with the cursor on it (or a click, on a screen without a cursor): shown at
+// every move over the photos, it got in the way. show(event) brings it up.
+function loupeIcon(show, extra) {
+  const icon = el("span", { class: "loupe-icon" + (extra ? " " + extra : ""), title: "L'œil à pleine résolution", role: "img",
+                            "aria-label": "Loupe sur l'œil" });
+  icon.innerHTML = LOUPE_SVG;             // (a constant of this page, nothing from the index)
+  icon.addEventListener("mouseenter", show);
+  icon.addEventListener("mousemove", show);
+  icon.addEventListener("mouseleave", hideLoupe);
+  icon.addEventListener("click", (event) => {
+    event.stopPropagation();              // (not a click on the photo under it)
+    if ($("loupe").hidden) show(event); else hideLoupe();
+  });
+  return icon;
+}
 
 // show next to the cursor the square around the eye of a photo (a frame of
 // the viewer, a tile); nothing for a photo whose eye is not known. avoid: a
@@ -551,7 +564,19 @@ function shownFrame() {
   return state.frames.find((frame) => frame.name === state.shown) || (photo && photo.name === state.shown ? photo : null);
 }
 
-// over the picture of the viewer: the loupe, and a ring where the eye is
+// the magnifier of the viewer, in a corner of the picture as it is drawn, when
+// the eye of the frame on screen is known
+function placeViewerLoupe() {
+  const icon = $("viewerLoupe"), img = $("viewerImg"), frame = shownFrame();
+  icon.hidden = !hasEye(frame) || !img.naturalWidth;
+  if (icon.hidden) return;
+  const shown = img.getBoundingClientRect(), stage = icon.parentElement.getBoundingClientRect();
+  const scale = Math.min(shown.width / img.naturalWidth, shown.height / img.naturalHeight);
+  icon.style.left = shown.left - stage.left + (shown.width - img.naturalWidth * scale) / 2 + 10 + "px";
+  icon.style.top = shown.top - stage.top + (shown.height - img.naturalHeight * scale) / 2 + 10 + "px";
+}
+
+// the magnifier of the viewer under the cursor: the loupe, and a ring where the eye is
 function overViewer(event) {
   const frame = shownFrame(), img = $("viewerImg"), ring = $("viewerEye");
   if (!hasEye(frame) || !img.naturalWidth) return loupe(event, frame);
@@ -593,6 +618,7 @@ function noteBadges(photo) {
 function showNotes() {
   const box = $("frameNotes"), photo = state.items[state.current];
   if (box && photo) box.replaceChildren(...noteBadges(photo));
+  placeViewerLoupe();
 }
 
 // the strip of the frames of the sequence on screen, each with its notes
@@ -616,9 +642,8 @@ async function loadStrip(photo, index) {
     cell.dataset.name = frame.name;
     cell.classList.toggle("on", frame.name === state.shown);
     img.addEventListener("error", () => cell.remove());
-    // (the eye of each frame under the cursor: the frames of a burst compared without opening them)
-    cell.addEventListener("mousemove", (event) => loupe(event, frame));
-    cell.addEventListener("mouseleave", hideLoupe);
+    // (the eye of each frame under its magnifier: the frames of a burst compared without opening them)
+    if (hasEye(frame)) cell.append(loupeIcon((event) => loupe(event, frame)));
     return cell;
   }));
   showNotes();
@@ -1072,8 +1097,9 @@ async function start() {
   state.panoCan = facets.pano;
   for (const [name] of facets.people || []) $("personList").append(el("option", { value: name }));
   $("viewerImg").addEventListener("load", drawFaces);
-  $("viewerImg").addEventListener("mousemove", overViewer);
-  $("viewerImg").addEventListener("mouseleave", hideLoupe);
+  $("viewerImg").addEventListener("load", placeViewerLoupe);
+  window.addEventListener("resize", placeViewerLoupe);
+  $("viewerLoupe").replaceWith(Object.assign(loupeIcon(overViewer, "big"), { id: "viewerLoupe", hidden: true }));
   $("loupe").firstElementChild.addEventListener("error", hideLoupe);
   window.addEventListener("resize", drawFaces);
   const store = facets.thumbs && facets.thumbs.total

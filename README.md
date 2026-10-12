@@ -439,11 +439,12 @@ l'appel à Claude le demandent.
   dossier, les renomme et les archive avec ce qui a été noté, sans rappeler
   Claude ; la base suit. Une photo dont la base a déjà le nom ailleurs est
   laissée de côté.
-- **La loupe sur l'œil.** Pour une photo d'oiseau dont l'œil a été trouvé,
-  passer le curseur sur la photo de la visionneuse, sur une vue de la bande
-  ou (après un instant) sur une tuile montre à côté du curseur un carré de
-  512 pixels autour de l'œil, à pleine résolution, avec sa note ; un
-  anneau marque l'œil sur la photo. S'il y a plusieurs oiseaux, c'est l'œil
+- **La loupe sur l'œil.** Une photo d'oiseau dont l'œil a été trouvé porte
+  une petite icône de loupe : sur sa tuile, sur la photo de la visionneuse
+  et sur chaque vue de la bande. Le curseur sur cette icône (ou un clic)
+  montre un carré de 512 pixels autour de l'œil, à pleine résolution, avec
+  sa note ; dans la visionneuse, un anneau marque alors l'œil sur la
+  photo. Rien ne s'affiche ailleurs qu'en passant sur l'icône. S'il y a plusieurs oiseaux, c'est l'œil
   du plus net. La position de l'œil est gardée dans la base (`eye_x`,
   `eye_y`, en fractions de la photo) et écrite dans le fichier comme une
   région XMP nommée « œil », de type Focus, dans le schéma des régions du

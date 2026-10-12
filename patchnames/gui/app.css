@@ -488,6 +488,62 @@
   display: none;
 }
 
+/* the magnifier on a photo whose eye is known: the loupe comes up only with
+   the cursor on it */
+.loupe-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: rgba(4, 8, 16, 0.78);
+  border: 1px solid rgba(98, 194, 255, 0.6);
+  color: var(--accent);
+  cursor: zoom-in;
+  pointer-events: auto;
+  vertical-align: middle;
+}
+
+.loupe-icon:hover {
+  background: var(--accent);
+  color: #04080f;
+}
+
+.loupe-icon svg {
+  width: 13px;
+  height: 13px;
+}
+
+.loupe-icon.big {
+  position: absolute;
+  z-index: 2;
+  width: 32px;
+  height: 32px;
+}
+
+.loupe-icon.big svg {
+  width: 17px;
+  height: 17px;
+}
+
+.viewer-strip .frame {
+  position: relative;
+}
+
+.viewer-strip .loupe-icon {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 18px;
+  height: 18px;
+}
+
+.viewer-strip .loupe-icon svg {
+  width: 10px;
+  height: 10px;
+}
+
 .eye-ring {
   position: absolute;
   width: 26px;
