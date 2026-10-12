@@ -490,6 +490,17 @@ l'appel à Claude le demandent.
   copie qui n'est pas montée. Une limite : un fichier renommé sur une copie
   (un fichier sans numéro d'appareil change de nom quand ses étiquettes
   sont écrites) reste sous son ancien nom sur l'autre.
+
+  La base de recherche, elle, n'existe que sur votre machine. À la fin de
+  chaque copie d'un disque à l'autre (et quand la comparaison ne trouve
+  rien à copier), une copie en est laissée sur les deux disques :
+  `patchdoc/photos.sqlite` à la racine de l'archive, la précédente gardée
+  sous le nom `photos.avant.sqlite`. Elle est prise par la sauvegarde de
+  SQLite, sûre pendant que la page tourne, et n'est refaite que si la base
+  a changé. La page ne la lit jamais : pour restaurer, recopiez le fichier
+  dans `~/photo/patchdoc/`. Les vignettes n'en font pas partie, elles se
+  refont. Ordre de grandeur : 120 Mo pour 240 000 photos dont peu sont
+  décrites, environ 300 Mo si toutes l'étaient.
 - **exiftool sur le serveur de l'archive.** Une archive montée par sshfs
   répond lentement : chaque fichier qu'exiftool ouvre est un aller-retour,
   et écrire une étiquette fait venir le fichier entier puis le renvoie. Si

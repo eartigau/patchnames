@@ -342,7 +342,7 @@ async function showArchive(data) {
   }
   if (!data.copies || data.copies.length < 2) return;        // one archive only, or a server from before this
   $("archive").hidden = false;
-  const job = data.sync || {}, busy = job.state === "planning" || job.state === "running";
+  const job = data.sync || {}, busy = ["planning", "running", "backup"].includes(job.state);
   $("archiveCopies").replaceChildren(...data.copies.map((copy) => el("span", {
     class: "chip" + (copy.used ? " on" : copy.mounted ? "" : " off"),
     text: copy.name + (copy.used ? " · utilisée" : copy.mounted ? "" : copy.server ? " · sur le serveur, pas montée" : " · pas branchée"),
@@ -386,6 +386,8 @@ async function showArchive(data) {
             job.bytes ? `${size(job.sent)} sur ${size(job.bytes)}` : "", Math.round(100 * share) + " %", job.pace,
             clock(job.seconds || 0) + " écoulées", left === null ? "" : "reste environ " + clock(left)].filter(Boolean).join(" · ") + ".";
     buttons.push(el("button", { class: "pill", type: "button", text: "Arrêter", onclick: () => archiveDo("/api/sync/stop") }));
+  } else if (job.state === "backup") {
+    text = `Copie de ${pair} faite. Sauvegarde de la base de recherche sur les disques…`;
   } else if (job.state === "done") {
     text = `Copie terminée de ${pair} : ${plural(job.files, "fichier", "fichiers")} (${size(job.bytes)}) en ${clock(job.seconds || 0)}.`;
   } else if (job.state === "stopped") {
@@ -395,6 +397,10 @@ async function showArchive(data) {
   }
   $("archiveActions").replaceChildren(
     el("span", { class: "mono", text: busy || job.state === "planned" ? "" : "Copier ce qui est plus récent :" }), ...buttons);
+  // (the index lives on this machine only: a copy of it is left on the drives)
+  if ((job.saved || []).length && ["done", "planned"].includes(job.state)) {
+    text += ` Base de recherche sauvegardée sur ${job.saved.join(" et ")} (dossier patchdoc).`;
+  }
   // (the duplicates put aside on one copy by `patchdoc doublons` are put aside on the other too)
   if (job.aside && text) text += ` ${plural(job.aside, "doublon rangé", "doublons rangés")} de côté sur l'autre copie, dans son dossier doublons.`;
   $("syncBar").hidden = !bar;

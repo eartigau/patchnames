@@ -180,7 +180,7 @@ def _sync_start(src, dst, go):
     other (go); False when a copy is already under way"""
     with _lock:
         state = _sync.get('state')
-        if state in ('planning', 'running'):
+        if state in ('planning', 'running', 'backup'):
             return False
         # (what was just compared is not compared again before it is copied)
         known = go and state == 'planned' and (_sync.get('src'), _sync.get('dst')) == (src, dst)
@@ -208,6 +208,9 @@ def _sync_job(src, dst, go, known):
         if not known:
             _sync.update(sync.plan(src, dst, skip))
         if not go or not _sync['files']:
+            if not _sync['files']:
+                # nothing to copy: the two copies are alike, the index is left on both
+                _sync.update(saved=sync.backup([src, dst]))
             _sync.update(state='planned', ended=time.time())
             return
         _sync_stop.clear()
@@ -215,6 +218,10 @@ def _sync_job(src, dst, go, known):
         ended = sync.run(src, dst, stop=_sync_stop, skip=skip,
                          tell=lambda sent, copied, pace: _sync.update(sent=sent, copied=copied,
                                                                       pace=pace))
+        if ended == 'done':
+            # a copy of the index, which lives on this machine only, on both drives
+            _sync.update(state='backup')
+            _sync.update(saved=sync.backup([src, dst]))
         _sync.update(state=ended, ended=time.time())
     except Exception as exc:
         _sync.update(state='error', error=str(exc), ended=time.time())
@@ -484,7 +491,7 @@ def _resume(stop):
     while not stop.is_set():
         _wake.clear()
         # (not while the files are being copied from a drive to the other)
-        copying = _sync.get('state') in ('planning', 'running')
+        copying = _sync.get('state') in ('planning', 'running', 'backup')
         todo = pending_writes() if _archive()['mounted'] and not copying else []
         for count, seq in enumerate(todo):
             if stop.is_set():

@@ -20,6 +20,7 @@ far it is: the bytes and the files copied so far, and the pace.
 
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import time
@@ -28,6 +29,8 @@ from . import config as _config_module
 
 #: never copied: what the Finder leaves behind
 EXCLUDE = ('.DS_Store', '._*')
+#: the folder of an archive root where a copy of the index is left (backup())
+BACKUP = 'patchdoc'
 FILES = re.compile(r'Number of (?:regular )?files transferred: ([\d,.\s]+)')
 BYTES = re.compile(r'Total transferred file size: ([\d,.\s]+)')
 #: a line of rsync --info=progress2: bytes so far, percent, pace, time, and
@@ -129,7 +132,8 @@ def command(src, dst, dry=False, cfg=None, skip=None):
     # -r the folders, -t with their dates, -u never over a newer file; two
     #   seconds apart is the same date (an exFAT drive keeps no finer)
     cmd = [path, '-rtu', '--modify-window=2'] + [f'--exclude={pattern}' for pattern in EXCLUDE]
-    cmd += ['--exclude=/doublons/'] + ([f'--exclude-from={skip}'] if skip else [])
+    cmd += ['--exclude=/doublons/', f'--exclude=/{BACKUP}/'] + (
+        [f'--exclude-from={skip}'] if skip else [])
     if far:
         cmd += ['-z', '-e', 'ssh -oBatchMode=yes -oConnectTimeout=20']
     if dry:
@@ -139,6 +143,73 @@ def command(src, dst, dry=False, cfg=None, skip=None):
     else:
         cmd += ['-v']
     return cmd + ends
+
+
+def backup(roots, cfg=None):
+    """leave on archive roots a copy of the index, which lives on this
+    machine only: the file photos.sqlite in the folder 'patchdoc' of each
+    root, the copy that was there kept as photos.avant.sqlite. The copy is
+    taken with SQLite's own backup, safe while the index is in use; a root
+    that already has the index as it is now is left alone. Returns the
+    names of the copies that have it."""
+    import json
+    import sqlite3
+    from . import photoindex
+    cfg = cfg or _config_module.load()
+    source = photoindex.db_path()
+    if not os.path.isfile(source):
+        return []
+    stamp = max(os.path.getmtime(path) for path in (source, source + '-wal') if os.path.isfile(path))
+    log = os.path.join(photoindex.index_dir(), 'sauvegardes.json')
+    try:
+        with open(log) as handle:
+            done = json.load(handle)
+    except (OSError, ValueError):
+        done = {}
+    todo = [root for root in roots if done.get(root) != stamp
+            and (os.path.isdir(root) or remote_of(root, cfg))]
+    if todo:
+        copy = os.path.join(photoindex.index_dir(), 'photos.copie.sqlite')
+        if os.path.exists(copy):
+            os.remove(copy)
+        live = sqlite3.connect(f'file:{source}?mode=ro', uri=True, timeout=60)
+        fresh = sqlite3.connect(copy)
+        with fresh:
+            live.backup(fresh)
+        # (one file that stands alone, without the write-ahead log of the live index)
+        fresh.execute('PRAGMA journal_mode = DELETE')
+        fresh.close()
+        live.close()
+        for root in todo:
+            far = remote_of(root, cfg)
+            try:
+                if far:
+                    host, _, there = far.partition(':')
+                    folder = f'{there}/{BACKUP}'
+                    keep = (f'mkdir -p {shlex.quote(folder)} && cd {shlex.quote(folder)} && '
+                            'if [ -f photos.sqlite ]; then mv -f photos.sqlite photos.avant.sqlite; fi')
+                    ssh = ['ssh', '-oBatchMode=yes', '-oConnectTimeout=20']
+                    if subprocess.run(ssh + [host, keep], capture_output=True, timeout=120).returncode:
+                        continue
+                    sent = subprocess.run([_rsync()[0], '-tz', '-e', ' '.join(ssh), copy,
+                                           f'{host}:{folder}/photos.sqlite'], capture_output=True)
+                    if sent.returncode:
+                        continue
+                else:
+                    folder = os.path.join(root, BACKUP)
+                    os.makedirs(folder, exist_ok=True)
+                    final = os.path.join(folder, 'photos.sqlite')
+                    if os.path.isfile(final):
+                        os.replace(final, os.path.join(folder, 'photos.avant.sqlite'))
+                    shutil.copy2(copy, final + '.tmp')
+                    os.replace(final + '.tmp', final)
+                done[root] = stamp
+            except (OSError, subprocess.TimeoutExpired):
+                continue
+        os.remove(copy)
+        with open(log, 'w') as handle:
+            json.dump(done, handle)
+    return [name_of(root) for root in roots if done.get(root) == stamp]
 
 
 def _number(text):
