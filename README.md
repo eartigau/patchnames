@@ -446,6 +446,20 @@ l'appel à Claude le demandent.
   de Claude ; l'écriture dans les fichiers, que le disque réseau rend bien
   plus lente, suit à part, une séquence après l'autre, avec sa propre ligne
   (« fichier 6 sur 11 »). Elle reprend toute seule si la page est relancée.
+- **Toute l'archive, en arrière-plan.** À côté, « Identifier toute
+  l'archive » met en file toutes les séquences de l'archive qui n'ont pas de
+  description, les plus récentes d'abord, quoi que la page affiche (les
+  photos pas encore archivées n'en font pas partie). Un premier clic dit
+  combien de séquences le second lancera. Pour une grande archive, c'est un
+  travail de plusieurs jours : il continue si la page est fermée, et il
+  reprend de lui-même quand `patchdoc gui` est relancé, jusqu'à ce que la
+  file soit vide ou que « Arrêter » y mette fin. Les séquences demandées
+  entre-temps avec le bouton voisin passent devant. Si quatre séquences de
+  suite échouent (limite d'utilisation de Claude atteinte, réseau coupé),
+  la file attend 10 minutes, puis 20, 40 et 60 au plus, et réessaie ; une
+  séquence en échec est reprise une fois, après que Claude a répondu de
+  nouveau. Si le disque d'archive n'est plus monté, la file attend son
+  retour.
 - **Les photos pas encore archivées.** En haut de la page, « Regarder »
   choisit ce qui est montré : tout, l'archive, ou les photos qui attendent
   dans `~/photo` avant d'être envoyées à l'archive (config `inbox_dirs` :

@@ -15,8 +15,10 @@ The page (gui/index.html, app.js) asks for:
     /api/describe            (POST) have Claude describe a sequence
     /api/write               (POST) write into its files what the index says
     /api/job?id=             how that is going
-    /api/batch               (POST) the same for a list of sequences, in the
-                             background; (GET) how that is going
+    /api/batch               (POST) the same for a list of sequences, or for
+                             every sequence of the archive that has no
+                             description, in the background; (GET) how that
+                             is going
     /api/batch/stop          (POST) drop the sequences still waiting
     /api/faces?name=         the faces of a photo, looked for if nobody did
     /api/face                (POST) who a face is
@@ -39,6 +41,15 @@ second step alone. The button above the results does both for every
 sequence shown that has no description yet, two at a time in the background:
 it goes on when the page is closed, and the page says how far it is when it
 comes back. The calls of a session stop at config 'doc_budget', if one is set.
+
+"Identifier toute l'archive" queues every sequence of the archive that has
+no description, the newest first: days of work, which the index remembers
+(meta 'batch_archive'), so that a server started again goes on with it until
+the page stops it. The sequences asked for in the page meanwhile go ahead of
+it. A batch that fails several sequences in a row (Claude at its usage
+limit, the network or the drive gone) waits and tries again instead of
+failing all it has left, and a sequence that failed is tried once more after
+Claude has answered again.
 
 The server listens on 127.0.0.1 only, answers only to its own address (so
 that no other site can reach it through the browser), and the actions that
@@ -82,7 +93,17 @@ _jobs, _lock, _spent = {}, threading.Lock(), {'total': 0.0}
 #:  being done, and what became of the others
 _batch = {'waiting': [], 'active': [], 'total': 0, 'done': 0, 'failed': 0, 'note': '',
           'finished': [], 'workers': 0, 'started': 0.0, 'ended': 0.0, 'sizes': {},
-          'photos': 0, 'photos_done': 0}
+          'photos': 0, 'photos_done': 0,
+          # how many finished sequences the page is no longer told of (see KEPT)
+          'base': 0,
+          # the sequences that failed and wait for Claude to answer again to be
+          #   tried once more, {sequence: error}, and those that had that try
+          'retry': {}, 'again': set(),
+          # the failures in a row, the waits in a row, until when the batch
+          #   waits, the error that made it wait, and whether the archive is away
+          'streak': 0, 'holds': 0, 'until': 0.0, 'why': '', 'away': False,
+          # whether it is the batch of the whole archive
+          'archive': False}
 #: the writing into the files of what the index learned (the batch leaves it
 #:  to _resume, one sequence after the other): how many sequences wait, the
 #:  one being written and how far; _wake: there is something new to write;
@@ -98,6 +119,17 @@ _inbox = {'state': 'idle'}
 #: sequences of a batch done at the same time (each reads and rewrites files
 #:  of the archive)
 BATCH_JOBS = 2
+#: a batch that fails STREAK sequences in a row waits instead of failing all
+#:  it has left (Claude at its usage limit, the network or the drive gone):
+#:  HOLD minutes, twice as long each time in a row, an hour at most
+STREAK, HOLD = 4, 10
+#: the page is told what became of the last sequences a batch finished, this
+#:  many at least (a batch of the whole archive finishes tens of thousands)
+KEPT = 400
+#: the sequences of the archive that have no description: those of the batch
+#:  of the whole archive (the photos that wait to go there have a full path)
+ARCHIVE_TODO = ("FROM photos WHERE rep = 1 AND described IS NULL AND seq IS NOT NULL "
+                "AND path NOT LIKE '/%'")
 
 
 def _db():
@@ -319,9 +351,11 @@ def _fill(stop):
 
 
 def _asking():
-    """whether Claude is being shown a sequence, or is about to be"""
+    """whether Claude is being shown a sequence, or is about to be (a batch
+    that waits leaves the drive to the others)"""
     with _lock:
-        return bool(_batch['waiting'] or _batch['active']
+        held = _batch['until'] > time.time() or _batch['away']
+        return bool(_batch['active'] or (_batch['waiting'] and not held)
                     or any(job.get('state') == 'running' for job in _jobs.values()))
 
 
@@ -350,12 +384,14 @@ def _work(seq, ask, write=True):
     (with the photo as the index now has it, and how many files are
     written), 'done', or 'error'"""
     from .doc import describe_sequence, write_sequence
-    job = {'state': 'running', 'since': time.time()}
+    job = {'state': 'running' if ask else 'writing', 'since': time.time()}
 
     def tell(**changes):
         with _lock:
             job.update(changes)
             _jobs[seq] = dict(job)
+
+    tell()          # (what an earlier try at this sequence left is forgotten)
 
     def photo():
         db = _db()
@@ -425,7 +461,7 @@ def _batch_add(names):
         return {'error': "Le disque d'archive n'est pas monté : Claude ne peut pas voir les "
                          'séquences.'}
     db = _db()
-    seqs, described, sizes = [], 0, {}
+    described, sizes = 0, {}
     for name in names[:5000]:
         row = db.execute('SELECT seq, seq_n, described FROM photos WHERE name = ?',
                          (str(name),)).fetchone()
@@ -433,17 +469,68 @@ def _batch_add(names):
             continue
         if row['described']:
             described += 1
-        elif row['seq'] not in seqs:
-            seqs.append(row['seq'])
-            sizes[row['seq']] = row['seq_n'] or 1
+        else:
+            sizes.setdefault(row['seq'], row['seq_n'] or 1)
     db.close()
+    return {'queued': _batch_queue(sizes), 'described': described}
+
+
+def _batch_archive():
+    """queue for Claude every sequence of the archive that has no description
+    yet, the newest first. The index keeps that this is under way (meta
+    'batch_archive'): a server started again goes on with it (_batch_again)."""
+    if not _archive()['mounted']:
+        return {'error': "Le disque d'archive n'est pas monté : Claude ne peut pas voir les "
+                         'séquences.'}
+    db = _db()
+    sizes = {row['seq']: row['seq_n'] or 1 for row in db.execute(
+        f'SELECT seq, seq_n {ARCHIVE_TODO} ORDER BY COALESCE(local, taken) DESC')}
+    db.close()
+    if not sizes:
+        _batch_keep(False)
+        return {'queued': 0}
+    _batch_keep(True)
+    return {'queued': _batch_queue(sizes, archive=True)}
+
+
+def _batch_keep(on):
+    """keep in the index whether the batch of the whole archive is under way"""
+    db = photoindex.connect()
+    photoindex.set_meta(db, 'batch_archive', '1' if on else '')
+    db.close()
+
+
+def _batch_again(stop):
+    """go on with the batch of the whole archive a server left under way,
+    once the archive is there"""
+    while not stop.is_set() and not _archive()['mounted']:
+        stop.wait(60)
+    # (unless the page stopped it meanwhile)
+    if not stop.is_set() and photoindex.meta('batch_archive') == '1':
+        _batch_archive()
+
+
+def _batch_queue(sizes, archive=False):
+    """add sequences to the batch, {sequence: its number of photos}, and
+    start the workers it lacks; how many were not in it yet. Those of the
+    whole archive go to the end of the queue; those asked for in the page go
+    to its front, ahead of an archive that may take days."""
     with _lock:
         if not (_batch['waiting'] or _batch['active']):
             # a new batch: the count of the last one is forgotten
-            _batch.update(total=0, done=0, failed=0, note='', finished=[], started=time.time(),
-                          ended=0.0, sizes={}, photos=0, photos_done=0)
-        new = [seq for seq in seqs if seq not in _batch['waiting'] and seq not in _batch['active']]
-        _batch['waiting'] += new
+            _batch.update(total=0, done=0, failed=0, note='', finished=[], base=0,
+                          started=time.time(), ended=0.0, sizes={}, photos=0, photos_done=0,
+                          retry={}, again=set(), streak=0, holds=0, until=0.0, why='',
+                          away=False, archive=False)
+        busy = set(_batch['active']) | set(_batch['retry'])
+        known = busy | set(_batch['waiting'])
+        new = [seq for seq in sizes if seq not in known]
+        if archive:
+            _batch['waiting'] += new
+            _batch['archive'] = True
+        else:
+            _batch['waiting'] = ([seq for seq in sizes if seq not in busy]
+                                 + [seq for seq in _batch['waiting'] if seq not in sizes])
         _batch['total'] += len(new)
         _batch['sizes'].update({seq: sizes[seq] for seq in new})
         _batch['photos'] += sum(sizes[seq] for seq in new)
@@ -451,43 +538,121 @@ def _batch_add(names):
         _batch['workers'] += start
     for _ in range(start):
         threading.Thread(target=_batch_worker, daemon=True).start()
-    return {'queued': len(new), 'described': described}
+    return len(new)
+
+
+def _batch_stop():
+    """drop the sequences of the batch still waiting; those under way finish"""
+    with _lock:
+        left = len(_batch['waiting']) + len(_batch['retry'])
+        _batch['total'] -= left
+        _batch['photos'] -= sum(_batch['sizes'].get(seq, 1)
+                                for seq in _batch['waiting'] + list(_batch['retry']))
+        _batch['waiting'], _batch['retry'], _batch['until'] = [], {}, 0.0
+        whole, _batch['archive'] = _batch['archive'], False
+        _batch['note'] = (f'Arrêt demandé : {left} séquences retirées de la file ; '
+                          'celles en cours se terminent.') if left else _batch['note']
+    if whole or photoindex.meta('batch_archive') == '1':
+        _batch_keep(False)
+
+
+def _batch_done(seq, photo, error):
+    """count a sequence the batch is through with, and keep what became of it
+    for the page (the lock is held)"""
+    _batch['failed' if error else 'done'] += 1
+    _batch['photos_done'] += _batch['sizes'].get(seq, 1)
+    _batch['finished'].append({'seq': seq, 'photo': photo, 'error': error})
+    if len(_batch['finished']) >= 2 * KEPT:
+        # the oldest are forgotten, with what was kept of their work
+        for old in _batch['finished'][:KEPT]:
+            if _jobs.get(old['seq'], {}).get('state') in ('done', 'error'):
+                del _jobs[old['seq']]
+        del _batch['finished'][:KEPT]
+        _batch['base'] += KEPT
+
+
+def _batch_next():
+    """what a worker of the batch does next: ('do', a sequence), ('wait',
+    seconds) while the batch waits (see STREAK) or the archive is away, or
+    ('end', whether the batch of the whole archive is over)"""
+    budget = float(_config_module.load().get('doc_budget') or 0)
+    mounted = bool(_archive()['mounted'])
+    with _lock:
+        if _batch['waiting'] and budget and _spent['total'] >= budget:
+            _batch['note'] = (f"Plafond d'appels à Claude de cette session atteint : "
+                              f"{len(_batch['waiting'])} séquences laissées (config doc_budget ; "
+                              'relancez patchdoc gui pour repartir de zéro).')
+            # (the batch of the whole archive goes on with the next session)
+            _batch['waiting'], _batch['archive'] = [], False
+        if not _batch['waiting']:
+            _batch['workers'] -= 1
+            whole = False
+            if not _batch['active']:
+                # the end: the sequences that failed and never saw Claude
+                #   answer again stay failed
+                for seq, error in _batch['retry'].items():
+                    _batch_done(seq, None, error)
+                _batch['retry'], _batch['until'], _batch['away'] = {}, 0.0, False
+                _batch['ended'] = _batch['ended'] or time.time()
+                whole, _batch['archive'] = _batch['archive'], False
+            return 'end', whole
+        _batch['away'] = not mounted
+        wait = max(_batch['until'] - time.time(), 0.0 if mounted else 30.0)
+        if wait > 0:
+            return 'wait', wait
+        seq = _batch['waiting'].pop(0)
+        _batch['active'].append(seq)
+        return 'do', seq
 
 
 def _batch_worker():
     """take the sequences of the batch one after the other until none is
-    left, the batch is stopped, or the calls of the session reach the budget"""
+    left, the batch is stopped, or the calls of the session reach the budget.
+    A sequence that fails is tried once more after Claude has answered again;
+    STREAK failures in a row make the batch wait before it tries again."""
     while True:
-        budget = float(_config_module.load().get('doc_budget') or 0)
-        with _lock:
-            if _batch['waiting'] and budget and _spent['total'] >= budget:
-                _batch['note'] = (f"Plafond d'appels à Claude de cette session atteint : "
-                                  f"{len(_batch['waiting'])} séquences laissées (config doc_budget ; "
-                                  'relancez patchdoc gui pour repartir de zéro).')
-                _batch['waiting'] = []
-            if not _batch['waiting']:
-                _batch['workers'] -= 1
-                return
-            seq = _batch['waiting'].pop(0)
-            _batch['active'].append(seq)
+        what, seq = _batch_next()
+        if what == 'end':
+            if seq:
+                _batch_keep(False)
+            return
+        if what == 'wait':
+            time.sleep(min(seq, 5))         # (a batch that is stopped is not kept waiting)
+            continue
         _work(seq, True, write=False)
         with _lock:
             job = _jobs.get(seq, {})
             _batch['active'].remove(seq)
-            _batch['done' if job.get('state') == 'done' else 'failed'] += 1
-            _batch['photos_done'] += _batch['sizes'].get(seq, 1)
-            _batch['finished'].append({'seq': seq, 'photo': job.get('photo'),
-                                       'error': job.get('error')})
-            if not (_batch['waiting'] or _batch['active']):
-                _batch['ended'] = time.time()
+            if job.get('state') == 'done':
+                _batch_done(seq, job.get('photo'), None)
+                _batch['streak'] = _batch['holds'] = 0
+                # Claude answers: the sequences that failed have their second try
+                _batch['again'].update(_batch['retry'])
+                _batch['waiting'][:0] = list(_batch['retry'])
+                _batch['retry'] = {}
+                continue
+            error = job.get('error') or 'échec'
+            if seq in _batch['again']:
+                _batch_done(seq, None, error)
+            else:
+                _batch['retry'][seq] = error
+            _batch['streak'] += 1
+            if _batch['streak'] >= STREAK and _batch['until'] <= time.time():
+                _batch['until'] = time.time() + 60 * min(60, HOLD * 2 ** _batch['holds'])
+                _batch['holds'] += 1
+                _batch['why'] = error
 
 
 def _batch_status(since=0):
     """how the batch goes, with what became of the sequences finished since
     the `since` first ones: the counts, the seconds it has run, its photos
     (those of the sequences done, and those read so far of the sequences
-    under way), what each sequence under way is at, and the writing into
-    the files that follows"""
+    under way), what each sequence under way is at, whether it waits, the
+    writing into the files that follows, and what the batch of the whole
+    archive would have to do"""
+    db = _db()
+    left = db.execute(f'SELECT COUNT(*) {ARCHIVE_TODO}').fetchone()[0]
+    db.close()
     with _lock:
         jobs = [dict({key: _jobs.get(seq, {}).get(key)
                       for key in ('state', 'measured', 'frames', 'stage')},
@@ -495,15 +660,23 @@ def _batch_status(since=0):
                      seconds=round(time.time() - (_jobs.get(seq, {}).get('since') or time.time())))
                 for seq in _batch['active']]
         running = bool(_batch['waiting'] or _batch['active'])
+        # (a page that was away for long, or that saw another batch, starts again)
+        at = since - _batch['base']
+        at = at if 0 <= at <= len(_batch['finished']) else 0
+        hold = max(0, round(_batch['until'] - time.time())) if _batch['waiting'] else 0
         return {'total': _batch['total'], 'done': _batch['done'], 'failed': _batch['failed'],
                 'waiting': len(_batch['waiting']), 'active': len(_batch['active']),
                 'running': running, 'note': _batch['note'],
-                'finished': _batch['finished'][since:], 'next': len(_batch['finished']),
+                'finished': _batch['finished'][at:],
+                'next': _batch['base'] + len(_batch['finished']),
                 'seconds': round((time.time() if running else _batch['ended'] or time.time())
                                  - _batch['started']) if _batch['started'] else 0,
                 'photos': _batch['photos'], 'photos_done': _batch['photos_done'],
                 'photos_read': sum(min(job['measured'] or 0, job['photos']) for job in jobs),
-                'jobs': jobs, 'writes': dict(_writes)}
+                'jobs': jobs, 'writes': dict(_writes),
+                'retry': len(_batch['retry']), 'hold': hold,
+                'why': _batch['why'] if hold else '', 'away': running and _batch['away'],
+                'archive': {'on': running and _batch['archive'], 'left': left}}
 
 
 def _resume(stop):
@@ -667,7 +840,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             body = json.loads(self.rfile.read(int(self.headers.get('Content-Length') or 0)))
             if self.path == '/api/batch':
-                self._send(200, _batch_add(list(body.get('names') or [])))
+                self._send(200, _batch_archive() if body.get('all')
+                           else _batch_add(list(body.get('names') or [])))
                 return
             if self.path in ('/api/archive/use', '/api/sync', '/api/sync/stop'):
                 # (the copies of the archive are named by the config, never by the page)
@@ -750,12 +924,7 @@ class Handler(BaseHTTPRequestHandler):
                 db.close()
                 return
             if self.path == '/api/batch/stop':
-                with _lock:
-                    left = len(_batch['waiting'])
-                    _batch['total'] -= left
-                    _batch['waiting'] = []
-                    _batch['note'] = (f'Arrêt demandé : {left} séquences retirées de la file ; '
-                                      'celles en cours se terminent.') if left else _batch['note']
+                _batch_stop()
                 self._send(200, {'ok': True})
                 return
             db = _db()
@@ -822,6 +991,10 @@ def serve(port=None, browser=True, fill=None):
         print('  vignettes : celles qui manquent sont faites en arrière-plan (--no-vignettes '
               'pour ne pas le faire)')
         threading.Thread(target=_fill, args=(stop,), daemon=True).start()
+    if photoindex.meta('batch_archive') == '1':
+        print("  identification de toute l'archive : elle reprend (le bouton « Arrêter » de la "
+              'page y met fin)')
+        threading.Thread(target=_batch_again, args=(stop,), daemon=True).start()
     if browser:
         threading.Timer(0.4, webbrowser.open, (url,)).start()
     try:

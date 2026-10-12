@@ -19,9 +19,11 @@ const NEW = "\u0000nouveau";      // the choice "ajouter un nom" of a face, "aut
 const UNKNOWN = "\u0000indéterminé";       // the choice of a bird that cannot be named
 // the notes of a bird photo, 1 to 5: column of the index, what the page calls it
 const NOTES = [["eye", "œil net"], ["clear", "dégagé"], ["level", "hauteur d'œil"]];
-// the batch of the button above the results: how many finished sequences
-// this page has taken in, its timer, and when the button was first clicked
-const batch = { since: 0, timer: null, armed: 0 };
+// the batch of the buttons above the results: how many finished sequences
+// this page has taken in, its timer, when each button was first clicked, and
+// what the server says of the whole archive ({on, left}; null from a server
+// that cannot do it)
+const batch = { since: 0, timer: null, armed: 0, allArmed: 0, archive: null };
 
 function el(tag, attrs, ...kids) {
   const node = document.createElement(tag);
@@ -207,7 +209,9 @@ function refresh(index) {
 }
 
 function batchButton() {
-  $("batch").hidden = !state.claude || !state.items.length;
+  $("batch").hidden = !state.claude || (!state.items.length && !batch.archive);
+  $("batchGo").hidden = !state.items.length;
+  archiveButton();
   const count = undescribed().length;
   batch.armed = 0;
   $("batchGo").disabled = !count;
@@ -233,6 +237,42 @@ async function batchGo() {
     $("batchStatus").textContent = reply.error === "refusé"
       ? "Ce serveur date d'avant cette fonction : arrêtez-le (Ctrl-C) et relancez `patchdoc gui`."
       : reply.error;
+    return;
+  }
+  batch.since = 0;
+  watchBatch();
+}
+
+// the button of the whole archive: every sequence of it that has no
+// description, whatever the page shows (left alone while it waits for its
+// second click)
+function archiveButton() {
+  const info = batch.archive;
+  $("batchAll").hidden = !info;
+  if (!info || Date.now() - batch.allArmed < 8000) return;
+  $("batchAll").disabled = info.on || !info.left;
+  $("batchAll").textContent = info.on ? "Toute l'archive est en cours d'identification"
+    : info.left ? `Identifier toute l'archive : ${plural(info.left, "séquence", "séquences")} sans description`
+    : "Toute l'archive est décrite";
+  $("batchAll").title = "Claude regarde en arrière-plan chaque séquence de l'archive qui n'a pas de description, "
+    + "les plus récentes d'abord, deux à la fois. Le travail continue si la page est fermée, et reprend si "
+    + "`patchdoc gui` est relancé, jusqu'à ce que « Arrêter » y mette fin. Les séquences demandées ici entre-temps passent devant.";
+}
+
+async function batchAll() {
+  const info = batch.archive;
+  if (!info || info.on || !info.left) return;
+  if (Date.now() - batch.allArmed > 8000) {     // a first click says what a second one will do
+    batch.allArmed = Date.now();
+    $("batchAll").textContent = `Confirmer : ${plural(info.left, "séquence", "séquences")} à montrer à Claude, en arrière-plan`
+      + (info.left > 1000 ? " (des jours de travail)" : "");
+    return;
+  }
+  batch.allArmed = 0;
+  const reply = await post("/api/batch", { all: true });
+  if (reply.error) {
+    archiveButton();
+    $("batchStatus").textContent = reply.error;
     return;
   }
   batch.since = 0;
@@ -270,9 +310,11 @@ function showBatch(status) {
   }
   $("batchBar").hidden = !status.running;
   $("batchFill").style.width = (100 * share).toFixed(1) + "%";
-  const failed = status.failed ? `, ${plural(status.failed, "échec", "échecs")}` : "";
+  const failed = (status.failed ? `, ${plural(status.failed, "échec", "échecs")}` : "")
+    + (status.retry ? `, ${status.retry} à réessayer` : "");
+  const whole = status.archive && status.archive.on;
   const parts = status.running
-    ? [`Claude en arrière-plan : ${finished} sur ${plural(status.total, "séquence", "séquences")}${failed}`,
+    ? [`${whole ? "Toute l'archive" : "Claude"} en arrière-plan : ${finished} sur ${plural(status.total, "séquence", "séquences")}${failed}`,
        Math.round(100 * share) + " %",
        seconds ? clock(seconds) + (timed ? " écoulées" : " de suivi") : "",
        left === null ? "temps restant : encore inconnu" : "reste environ " + clock(left),
@@ -288,6 +330,14 @@ function showBatch(status) {
         : job.stage === "yeux" ? "Claude regarde l'œil de chaque vue de près" : "Claude regarde la séquence")
       + ` · ${clock(job.seconds)}`;
   });
+  // a batch that waits: Claude at its usage limit, the network or the drive gone
+  if (status.hold) {
+    lines.unshift(`En attente encore ${clock(status.hold)} : plusieurs séquences de suite ont échoué `
+      + "(limite d'utilisation de Claude, réseau ou disque ?). La file reprend ensuite, et ces séquences seront réessayées."
+      + (status.why ? " Dernière erreur : " + status.why : ""));
+  } else if (status.away) {
+    lines.unshift("Le disque d'archive n'est plus monté : la file attend son retour.");
+  }
   const writes = status.writes || {};
   if (writes.seq) {
     lines.push(`Écriture dans les fichiers : ${writes.files ? `fichier ${writes.written} sur ${writes.files}` : "début"} de ${writes.seq}`
@@ -315,8 +365,10 @@ async function watchBatch() {
     }
   }
   batch.since = status.next;
+  batch.archive = status.archive || null;
   $("batchStop").hidden = !status.running;
   showBatch(status);
+  archiveButton();
   if (status.finished.length || !status.running) batchButton();
   // (the files are still being written after the last sequence is identified)
   if (status.running || (status.writes && status.writes.seq)) batch.timer = setTimeout(watchBatch, 2000);
@@ -1185,6 +1237,7 @@ async function start() {
     }
   } catch (err) { /* private mode */ }
   $("batchGo").addEventListener("click", batchGo);
+  $("batchAll").addEventListener("click", batchAll);
   $("batchStop").addEventListener("click", async () => { await post("/api/batch/stop"); watchBatch(); });
   $("viewerClose").addEventListener("click", closeViewer);
   $("viewerPrev").addEventListener("click", () => step(-1));
