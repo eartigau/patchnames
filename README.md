@@ -427,6 +427,18 @@ l'appel à Claude le demandent.
   de Claude ; l'écriture dans les fichiers, que le disque réseau rend bien
   plus lente, suit à part, une séquence après l'autre, avec sa propre ligne
   (« fichier 6 sur 11 »). Elle reprend toute seule si la page est relancée.
+- **Les photos pas encore archivées.** En haut de la page, « Regarder »
+  choisit ce qui est montré : tout, l'archive, ou les photos qui attendent
+  dans `~/photo` avant d'être envoyées à l'archive (config `inbox_dirs` :
+  par défaut `~/photo`, `~/photo/oiseaux` et `~/photo/autres`, les fichiers
+  posés directement dans chacun, pas leurs autres sous-dossiers). Choisir
+  ces photos relit les dossiers et ajoute à la base ce qui est nouveau,
+  sans rien renommer ni déplacer. Elles s'identifient, se notent et se
+  corrigent alors comme celles de l'archive, et ce qui est dit est écrit
+  dans leurs fichiers là où ils sont. Ensuite `patchdoc`, lancé dans leur
+  dossier, les renomme et les archive avec ce qui a été noté, sans rappeler
+  Claude ; la base suit. Une photo dont la base a déjà le nom ailleurs est
+  laissée de côté.
 - **La loupe sur l'œil.** Pour une photo d'oiseau dont l'œil a été trouvé,
   passer le curseur sur la photo de la visionneuse, sur une vue de la bande
   ou (après un instant) sur une tuile montre à côté du curseur un carré de
@@ -579,6 +591,7 @@ disque est en réseau.
   },
   "bird_lenses": ["200-500mm", "300mm"],
   "photo_archive_mounts": [],
+  "inbox_dirs": ["~/photo", "~/photo/oiseaux", "~/photo/autres"],
   "photo_archive_remotes": {},
   "remote_exiftool": null,
   "bird_focal_min": 200,

@@ -1661,6 +1661,74 @@ def index_exif(folders, gap=None, force=False, chunk=200):
     db.close()
 
 
+def inbox_dirs(cfg=None):
+    """the folders where photos wait before they are sent to the archive
+    (config 'inbox_dirs')"""
+    cfg = cfg or _cfg()
+    return [os.path.abspath(os.path.expanduser(folder)) for folder in cfg.get('inbox_dirs') or []]
+
+
+def inbox_files(cfg=None):
+    """the photos that wait in those folders: the files directly in each
+    (their own subfolders hold other things)"""
+    found = []
+    for folder in inbox_dirs(cfg):
+        if os.path.isdir(folder):
+            found += [os.path.join(folder, name) for name in sorted(os.listdir(folder))
+                      if name.lower().endswith(_extensions()) and not name.startswith('.')
+                      and os.path.isfile(os.path.join(folder, name))]
+    return found
+
+
+def index_inbox(tell=None, chunk=100):
+    """Bring to the index the photos that wait to be sent to the archive,
+    where they are, so that the search page can describe and note them
+    before they go: what they say of themselves, their sequences and their
+    eBird checklists, as `patchdoc index --exif` does for the archive.
+    Nothing is renamed nor moved. The photos of those folders that are no
+    longer there (sent to the archive since) leave the index; a photo whose
+    name the index already has elsewhere is left out. tell(done, total) as
+    the files are read. Returns {'files', 'new', 'gone', 'elsewhere'}."""
+    cfg = _cfg()
+    folders = tuple(folder + os.sep for folder in inbox_dirs(cfg))
+    files = inbox_files(cfg)
+    db = photoindex.connect()
+    try:
+        known = {row['name']: row['path'] or '' for row in db.execute('SELECT name, path FROM photos')}
+        gone = [name for name, path in known.items()
+                if path.startswith(folders) and not os.path.exists(path)]
+        photoindex.forget(db, gone)
+        elsewhere = [path for path in files
+                     if known.get(os.path.basename(path)) not in (None, path)]
+        todo = [path for path in files if os.path.basename(path) not in known]
+        rows = {}
+        for start in range(0, len(todo), chunk):
+            rows.update({os.path.basename(src): row
+                         for src, row in read_exif(todo[start:start + chunk]).items()})
+            if tell:
+                tell(min(start + chunk, len(todo)), len(todo))
+        if rows:
+            data = _ebird.load()
+            if data:
+                photoindex.sync_ebird(db, data)
+            # the clock offset the index has for each day (the most common one last)
+            before = {datetime.strptime(day, '%Y-%m-%d').date(): offset or 0.0
+                      for day, offset, _ in db.execute(
+                          'SELECT substr(taken, 1, 10), clock_offset, COUNT(*) FROM photos '
+                          'WHERE bird = 1 AND taken IS NOT NULL GROUP BY 1, 2 ORDER BY 3')}
+            paths = {os.path.basename(path): path for path in todo}
+            seqs = sequences(sorted(rows), rows, cfg['keywords_gap'],
+                             lambda row: _focal(row) > cfg['bird_focal_min'])
+            locate(seqs, data, rows, before=before)
+            records = []
+            for seq in seqs:
+                records += frame_records(seq, said_of(seq, rows, data), rows, paths)
+            photoindex.put(db, records)
+        return {'files': len(files), 'new': len(rows), 'gone': len(gone), 'elsewhere': len(elsewhere)}
+    finally:
+        db.close()
+
+
 def rematch():
     """Match every sequence of the index with the eBird checklists again, from
     the index alone: after a new export (a list entered after its photos were

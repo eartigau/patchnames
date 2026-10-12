@@ -8,7 +8,7 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
-const FIELDS = ["section", "q", "species", "person", "place", "region", "year", "since", "until", "topic",
+const FIELDS = ["section", "place_of", "q", "species", "person", "place", "region", "year", "since", "until", "topic",
                 "eye", "clear", "level", "flag", "sort"];
 const PAGE = 60;
 const state = { items: [], offset: 0, done: false, loading: false, token: 0, current: -1, checklist: "", total: 0,
@@ -312,6 +312,53 @@ async function watchBatch() {
   if (status.finished.length || !status.running) batchButton();
   // (the files are still being written after the last sequence is identified)
   if (status.running || (status.writes && status.writes.seq)) batch.timer = setTimeout(watchBatch, 2000);
+}
+
+/* ── What the page looks at: the archive, or the photos that wait to go there ── */
+
+const inbox = { timer: null };
+
+// at the top of the page: everything, the archive, or the photos that wait in
+// the folders of config 'inbox_dirs' (~/photo) to be sent to the archive.
+// Choosing those looks at the folders again, then shows what is there, to
+// describe and note it where it is.
+async function showInbox(data) {
+  clearTimeout(inbox.timer);
+  if (!data) {
+    try { data = await (await fetch("/api/inbox")).json(); } catch (err) { return; }
+  }
+  if (!data.dirs) return;          // a server from before this
+  $("inbox").hidden = false;
+  const where = $("place_of").value;
+  const choose = async (value) => {
+    $("place_of").value = value;
+    if (value === "attente") return showInbox(await post("/api/inbox"));       // a fresh look at the folders
+    showInbox();
+    load(true);
+  };
+  const waiting = `${data.dirs[0] || "~/photo"} · pas encore archivé` + (data.photos ? ` (${number(data.photos)})` : "");
+  $("inboxChoice").replaceChildren(...[["", "Tout"], ["archive", "L'archive"], ["attente", waiting]].map(([value, label]) =>
+    el("span", { class: "chip" + (where === value ? " on" : ""), text: label,
+                 title: value === "attente" ? "Les photos posées dans " + data.dirs.join(", ") + " : les décrire et les noter avant de les envoyer à l'archive"
+                   : value ? "Seulement les photos déjà dans l'archive" : "L'archive et les photos qui attendent",
+                 onclick: () => choose(value) })));
+  let text = "";
+  if (data.state === "reading") {
+    text = `Lecture des photos de ${data.dirs.join(", ")}…` + (data.total ? ` ${data.read} sur ${data.total}` : "");
+    inbox.timer = setTimeout(showInbox, 1000);
+  } else if (data.state === "error") {
+    text = "La lecture a échoué : " + data.error;
+  } else if (where === "attente") {
+    text = data.files
+      ? `${plural(data.files, "photo attend", "photos attendent")} dans ${data.dirs.join(", ")}`
+        + (data.new ? ` ; ${plural(data.new, "nouvelle", "nouvelles")}` : "")
+        + (data.elsewhere ? ` ; ${plural(data.elsewhere, "laissée", "laissées")} de côté (la base a déjà ce nom ailleurs)` : "")
+        + ". Une fois décrites, `patchdoc` dans leur dossier les renomme et les archive avec ce qui a été noté."
+      : `Aucune photo dans ${data.dirs.join(", ")}.`;
+  }
+  $("inboxStatus").textContent = text;
+  if (data.state === "done" && inbox.was === "reading") load(true);      // what was just read
+  inbox.was = data.state;
 }
 
 /* ── The copies of the archive: which one is used, and rsync between them ── */
@@ -1124,6 +1171,7 @@ async function start() {
   if (wanted && at >= 0) openViewer(at);
   watchBatch();         // a batch started before the page was opened goes on
   showArchive();
+  showInbox();
 }
 
 start().catch((err) => { $("status").textContent = "La page n'a pas pu démarrer : " + err.message; });

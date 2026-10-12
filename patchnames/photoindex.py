@@ -414,8 +414,14 @@ def _fts(text):
 
 def _where(q='', species='', listed=False, place='', region='', year='', since='', until='',
            topic='', kind='', flag='', checklist='', section='', person='', eye='', clear='',
-           level='', **_):
+           level='', place_of='', **_):
     where, args = ['p.rep = 1'], []
+    # a photo of the archive has a path relative to it; one that waits to be
+    #   sent there, where it is
+    if place_of == 'attente':
+        where.append("p.path LIKE '/%'")
+    elif place_of == 'archive':
+        where.append("p.path NOT LIKE '/%'")
     if section == 'oiseaux':
         where.append(BIRDS)
     elif section == 'famille':

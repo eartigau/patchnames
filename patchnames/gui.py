@@ -67,7 +67,7 @@ from .ebird import country_name
 STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'gui')
 #: the filters of /api/search (see photoindex._where)
 FILTERS = ('q', 'species', 'place', 'region', 'year', 'since', 'until', 'topic', 'kind',
-           'flag', 'checklist', 'sort', 'section', 'person', 'eye', 'clear', 'level')
+           'flag', 'checklist', 'sort', 'section', 'person', 'eye', 'clear', 'level', 'place_of')
 #: the extensions of the raw files, which get the "Ouvrir avec" button
 RAW = ('nef', 'dng')
 #: images made from the photos at the same time, at most (the archive may be
@@ -93,6 +93,8 @@ _wake, _writing = threading.Event(), set()
 #:  'idle', 'planning' (rsync compares the two), 'planned' (what it would
 #:  bring), 'running', 'done', 'stopped' or 'error', with the counts
 _sync, _sync_stop = {'state': 'idle'}, threading.Event()
+#: the look at the photos that wait to be sent to the archive (doc.index_inbox)
+_inbox = {'state': 'idle'}
 #: sequences of a batch done at the same time (each reads and rewrites files
 #:  of the archive)
 BATCH_JOBS = 2
@@ -163,6 +165,28 @@ def _archive():
     it is not)"""
     roots = photoindex.roots()
     return {'roots': roots, 'mounted': next((root for root in roots if os.path.isdir(root)), None)}
+
+
+def _inbox_status():
+    """the photos that wait to be sent to the archive: the folders looked
+    at, how many photos are there and how many the index has"""
+    from .doc import inbox_dirs, inbox_files
+    db = _db()
+    indexed = db.execute("SELECT COUNT(*), COUNT(DISTINCT seq) FROM photos WHERE path LIKE '/%'").fetchone()
+    db.close()
+    home = os.path.expanduser('~')
+    return dict(_inbox, dirs=[folder.replace(home, '~', 1) for folder in inbox_dirs()],
+                files=len(inbox_files()), photos=indexed[0], sequences=indexed[1])
+
+
+def _inbox_job():
+    """look at the folders where photos wait, and bring what is new to the index"""
+    from .doc import index_inbox
+    try:
+        found = index_inbox(tell=lambda done, total: _inbox.update(read=done, total=total))
+        _inbox.update(found, state='done', error='')
+    except Exception as exc:
+        _inbox.update(state='error', error=str(exc))
 
 
 def _copies():
@@ -619,6 +643,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, _batch_status(int(args.get('since') or 0)))
             elif url.path == '/api/archive':
                 self._send(200, _copies())
+            elif url.path == '/api/inbox':
+                self._send(200, _inbox_status())
             elif url.path == '/api/faces':
                 self._send(200, _faces(os.path.basename(args.get('name', ''))))
             else:
@@ -635,7 +661,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.headers.get('X-Patchdoc') != '1' or self.path not in (
                 '/api/reveal', '/api/open', '/api/describe', '/api/write', '/api/batch',
                 '/api/batch/stop', '/api/face', '/api/pano', '/api/archive/use', '/api/sync',
-                '/api/sync/stop', '/api/species'):
+                '/api/sync/stop', '/api/species', '/api/inbox'):
             self._send(403, {'error': 'refusé'})
             return
         try:
@@ -666,6 +692,15 @@ class Handler(BaseHTTPRequestHandler):
                         self._send(200, dict(_copies(), error='Une copie est déjà en cours.'))
                         return
                 self._send(200, _copies())
+                return
+            if self.path == '/api/inbox':
+                with _lock:
+                    busy = _inbox.get('state') == 'reading'
+                    if not busy:
+                        _inbox.update(state='reading', read=0, total=0, error='')
+                if not busy:
+                    threading.Thread(target=_inbox_job, daemon=True).start()
+                self._send(200, _inbox_status())
                 return
             if self.path == '/api/species':
                 # the photographer sets an identification right

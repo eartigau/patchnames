@@ -12,6 +12,11 @@ DEFAULTS = {
     # other places the same archive may be mounted at (the drive plugged in
     #   directly, another network mount): the first one that is there is used
     'photo_archive_mounts': [],
+    # where photos wait before they are sent to the archive: the search page
+    #   can look at the files directly in these folders (not in their own
+    #   subfolders), to describe and note them where they are
+    'inbox_dirs': [str(Path.home() / 'photo'), str(Path.home() / 'photo' / 'oiseaux'),
+                   str(Path.home() / 'photo' / 'autres')],
     # how rsync reaches a copy of the archive that is on a server, without
     #   going through its mount: {"~/mnt/URUBU/photo": "user@host:/path/photo"}
     #   (a copy mounted with sshfs is found without it while it is mounted)
