@@ -368,7 +368,8 @@ l'appel à Claude le demandent.
   Pour une rafale d'oiseau, chaque vue est d'abord lue sur le disque
   d'archive pour être notée (la page dit où elle en est), quatre vues à la
   fois : 1,6 à 3,8 s par vue mesurées sur un disque réseau occupé, là où
-  une lecture vue par vue en prenait environ 7.
+  une lecture vue par vue en prenait environ 7 ; moins d'une seconde par
+  vue quand exiftool tourne sur le serveur (voir plus bas).
   Sur un disque réseau, cette écriture récrit chaque fichier et peut prendre
   des minutes pour une longue rafale ; la page dit où elle en est, et une
   écriture coupée par l'arrêt du serveur reprend à son prochain démarrage.
@@ -435,6 +436,9 @@ l'appel à Claude le demandent.
   si c'est le cas, et tout se fait ici comme avant quand le serveur n'a pas
   exiftool ou ne répond pas. `{"remote_exiftool": false}` l'interdit, ou
   donne le chemin d'exiftool sur le serveur s'il n'est pas dans le PATH.
+  Mesuré avec un Raspberry Pi pour serveur, par fichier NEF : écrire ses
+  étiquettes, 0,4 s au lieu de 13 ; lire ses étiquettes, 0,2 s au lieu de
+  0,8 ; ses étiquettes et l'image qu'il contient, 0,8 s au lieu de 2,5.
 - **SQLite plutôt que DuckDB.** La page lit la base pendant que `patchdoc` y
   écrit, ce qu'un fichier DuckDB n'accepte pas entre deux processus, et sa
   recherche plein texte suit chaque ajout. Les colonnes sont typées : DuckDB
