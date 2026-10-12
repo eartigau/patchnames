@@ -94,9 +94,26 @@ def _rsync():
     return path, bool(found) and (int(found.group(1)), int(found.group(2))) >= (3, 1)
 
 
-def command(src, dst, dry=False, cfg=None):
+def skip_file(paths):
+    """a file that tells rsync to leave these paths alone (relative to the
+    archive root): what was put aside as a duplicate on one copy and may
+    still be in place on the other (see dupes.py); None without any"""
+    if not paths:
+        return None
+    from . import photoindex
+    name = os.path.join(photoindex.index_dir(), 'doublons_exclus.txt')
+    with open(name, 'w') as handle:
+        for path in paths:
+            # (anchored at the root of the copy; the wildcards of rsync taken literally)
+            handle.write('/' + re.sub(r'([*?\[\]\\])', r'\\\1', path) + '\n')
+    return name
+
+
+def command(src, dst, dry=False, cfg=None, skip=None):
     """the rsync command that brings to the copy `dst` what the copy `src`
-    has that is newer or missing there (two archive roots)"""
+    has that is newer or missing there (two archive roots); skip: a file of
+    paths to leave alone (skip_file). The folder of the duplicates of each
+    copy is never copied: each copy puts its own aside."""
     cfg = cfg or _config_module.load()
     path, modern = _rsync()
     ends = []
@@ -112,6 +129,7 @@ def command(src, dst, dry=False, cfg=None):
     # -r the folders, -t with their dates, -u never over a newer file; two
     #   seconds apart is the same date (an exFAT drive keeps no finer)
     cmd = [path, '-rtu', '--modify-window=2'] + [f'--exclude={pattern}' for pattern in EXCLUDE]
+    cmd += ['--exclude=/doublons/'] + ([f'--exclude-from={skip}'] if skip else [])
     if far:
         cmd += ['-z', '-e', 'ssh -oBatchMode=yes -oConnectTimeout=20']
     if dry:
@@ -128,10 +146,10 @@ def _number(text):
     return int(digits) if digits else 0
 
 
-def plan(src, dst):
+def plan(src, dst, skip=None):
     """what a copy from `src` to `dst` would bring, without copying:
     {'files', 'bytes'}; raises RuntimeError"""
-    res = subprocess.run(command(src, dst, dry=True), capture_output=True, text=True)
+    res = subprocess.run(command(src, dst, dry=True, skip=skip), capture_output=True, text=True)
     if res.returncode != 0:
         raise RuntimeError((res.stderr or res.stdout).strip()[-400:] or 'rsync a échoué')
     files, size = FILES.search(res.stdout), BYTES.search(res.stdout)
@@ -139,11 +157,11 @@ def plan(src, dst):
             'bytes': _number(size.group(1)) if size else 0}
 
 
-def run(src, dst, tell=None, stop=None):
+def run(src, dst, tell=None, stop=None, skip=None):
     """copy from `src` to `dst` what is newer or missing there; tell(bytes,
     files, pace) as it goes, stop: an Event that ends it. Returns 'done' or
     'stopped'; raises RuntimeError."""
-    cmd = command(src, dst)
+    cmd = command(src, dst, skip=skip)
     named = '-v' in cmd         # an rsync without progress2: it names each file it copies
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     seen, files = b'', 0

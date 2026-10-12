@@ -2173,7 +2173,23 @@ def main():
     p_ebird.add_argument('--login', action='store_true',
                          help='Garder les comptes eBird et courriel dans le trousseau de macOS.')
 
+    p_dupes = sub.add_parser(
+        'doublons', help="Les images présentes deux fois dans l'archive (la même image, une "
+                         "autre heure) : dire laquelle est la bonne d'après les listes eBird, et "
+                         'ranger les autres dans un dossier doublons.')
+    p_dupes.add_argument('dossiers', nargs='*', metavar='DOSSIER',
+                         help="Ne regarder que les doublons qui touchent ces dossiers de l'archive "
+                              '(2026_07, mexico2026...) ; toute l\'archive sans cela.')
+    p_dupes.add_argument('--deplacer', action='store_true',
+                         help="Ranger les fichiers en trop dans le dossier doublons de l'archive "
+                              "(rien n'est effacé) et mettre les JPG et DNG à l'heure de leur NEF ; "
+                              'sans cela, seulement dire ce qui serait fait.')
+
     args = parser.parse_args()
+    if args.cmd == 'doublons':
+        from . import dupes
+        dupes.main(folders=args.dossiers, move=args.deplacer)
+        return
     if args.cmd == 'gui':
         from .gui import serve
         serve(port=args.port, browser=not args.no_browser,

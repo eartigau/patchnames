@@ -395,6 +395,8 @@ async function showArchive(data) {
   }
   $("archiveActions").replaceChildren(
     el("span", { class: "mono", text: busy || job.state === "planned" ? "" : "Copier ce qui est plus récent :" }), ...buttons);
+  // (the duplicates put aside on one copy by `patchdoc doublons` are put aside on the other too)
+  if (job.aside && text) text += ` ${plural(job.aside, "doublon rangé", "doublons rangés")} de côté sur l'autre copie, dans son dossier doublons.`;
   $("syncBar").hidden = !bar;
   $("syncStatus").textContent = text;
   if (busy) archive.timer = setTimeout(showArchive, 2000);

@@ -199,14 +199,20 @@ def _sync_job(src, dst, go, known):
     in `dst`, or missing there; known: that was just done), and copy it if
     asked (go)"""
     try:
+        # the duplicates put aside on one copy (patchdoc doublons) are put
+        #   aside on the other too, and the copy leaves them alone
+        from . import dupes
+        skip = sync.skip_file(dupes.excluded())
+        if skip and not known:
+            _sync.update(aside=sum(dupes.settle(root) for root in (src, dst) if os.path.isdir(root)))
         if not known:
-            _sync.update(sync.plan(src, dst))
+            _sync.update(sync.plan(src, dst, skip))
         if not go or not _sync['files']:
             _sync.update(state='planned', ended=time.time())
             return
         _sync_stop.clear()
         _sync.update(state='running', started=time.time(), ended=0, sent=0, copied=0, pace='')
-        ended = sync.run(src, dst, stop=_sync_stop,
+        ended = sync.run(src, dst, stop=_sync_stop, skip=skip,
                          tell=lambda sent, copied, pace: _sync.update(sent=sent, copied=copied,
                                                                       pace=pace))
         _sync.update(state=ended, ended=time.time())

@@ -274,6 +274,46 @@ le trousseau de macOS (ou dans `PATCHNAMES_EBIRD_USER`,
 `PATCHNAMES_EBIRD_PASSWORD`, `PATCHNAMES_IMAP_USER`,
 `PATCHNAMES_IMAP_PASSWORD`), jamais dans un fichier.
 
+### Les doublons
+
+Une photo archivée à la mauvaise heure, puis corrigée, laisse deux
+fichiers : la même image, une autre heure dans son EXIF et dans son nom.
+
+```bash
+patchdoc doublons                 # dire ce qui serait fait, sans rien toucher
+patchdoc doublons 2026_07 voyage  # seulement ce qui touche ces dossiers
+patchdoc doublons --deplacer      # ranger les fichiers en trop dans doublons/
+```
+
+- **La même image.** Deux fichiers sont le même cliché quand leurs données
+  image sont identiques, quoi que disent leurs métadonnées (l'empreinte
+  `ImageDataHash` d'exiftool). Ne sont lus que les fichiers qui pourraient
+  l'être : même extension, taille presque égale, et le même numéro
+  d'appareil dans leur nom, ou le même nom. Les empreintes sont gardées
+  dans la base : une recherche arrêtée (Ctrl-C) ou relancée ne relit que ce
+  qu'elle n'a pas lu.
+- **Lequel est le bon.** Vos listes eBird ont la bonne heure : l'heure qui
+  tombe pendant une liste l'emporte. Quand les listes ne tranchent pas (pas
+  de liste, ou les deux heures dans la même), les photos du même jour qui
+  ont le même écart et que les listes départagent décident pour les
+  autres ; à défaut, celles des mêmes dossiers. Parmi les fichiers à la
+  bonne heure, celui qui est dans l'arborescence de l'archive
+  (`20YY_MM/oiseaux` ou `autres`) est gardé. Un groupe que rien ne
+  départage est laissé en place et listé.
+- **Rien n'est effacé.** `--deplacer` range les fichiers en trop dans
+  `doublons/`, à la racine de l'archive, sous le chemin qu'ils avaient ;
+  vous les supprimez vous-même. Le détail, fichier par fichier, est écrit
+  dans `doublons.tsv` à côté de la base, avec la raison de chaque choix.
+- **Les images tirées d'un NEF.** Un JPG ou un DNG fait à partir d'un NEF
+  avant que son heure soit corrigée est resté à l'ancienne. Le NEF a
+  raison : l'image prend son heure (EXIF) et son nom. Le NEF est reconnu à
+  son numéro d'appareil, à moins de deux jours, et au même appareil et à la
+  même exposition.
+- **Les deux copies de l'archive.** Ce qui a été rangé sur une copie est
+  retenu dans la base : la copie d'un disque à l'autre ne ramène jamais un
+  doublon, ne copie jamais le dossier `doublons/`, et range les mêmes
+  fichiers de côté sur l'autre copie, dans son propre dossier `doublons/`.
+
 ### La page de recherche et sa base de données
 
 `patchdoc gui` ouvre http://127.0.0.1:8765/ (`--port`), servie à cette
