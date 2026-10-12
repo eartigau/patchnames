@@ -450,6 +450,54 @@
   pointer-events: none;
 }
 
+/* the loupe: the eye of the bird at full resolution, next to the cursor;
+   and a ring on the picture where that eye is */
+.loupe {
+  position: fixed;
+  z-index: 3000;
+  width: min(384px, 46vh);
+  aspect-ratio: 1;
+  border-radius: 14px;
+  border: 2px solid var(--accent);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+  pointer-events: none;
+  background: #04080f;
+}
+
+.loupe img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.loupe span {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  padding: 2px 9px;
+  border-radius: 0 8px 0 0;
+  background: rgba(4, 8, 16, 0.8);
+  color: var(--text);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.72rem;
+}
+
+.loupe span:empty {
+  display: none;
+}
+
+.eye-ring {
+  position: absolute;
+  width: 26px;
+  height: 26px;
+  margin: -13px 0 0 -13px;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(4, 8, 16, 0.7);
+}
+
 .face {
   position: absolute;
   border: 2px solid var(--accent);

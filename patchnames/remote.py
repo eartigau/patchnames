@@ -100,21 +100,38 @@ def run(args, files, timeout=900):
     """exiftool with these arguments on these files: (return code, standard
     output as bytes, standard error as text, where the files were for it:
     {path there: path here}, empty when it ran here)"""
-    files = [str(file) for file in files]
-    places = [place(file) for file in files]
-    host = places[0][0] if places and all(places) and len({p[0] for p in places}) == 1 else None
+    return run_many([(args, files)], timeout)
+
+
+def run_many(blocks, timeout=900):
+    """several exiftool commands in one run, [(arguments, files)], each
+    with its own arguments (exiftool -execute between them): one start of
+    exiftool, and one trip to the server, for files that do not get the same
+    tags. Returns what run() does."""
+    blocks = [([str(arg) for arg in args], [str(file) for file in files]) for args, files in blocks]
+    files = [file for _, group in blocks for file in group]
+    places = {file: place(file) for file in files}
+    hosts = {where[0] if where else None for where in places.values()}
+    host = hosts.pop() if len(hosts) == 1 else None
     there = tool(host) if host else None
+
+    def lines(name):
+        out = []
+        for count, (args, group) in enumerate(blocks):
+            out += ['-execute'] * bool(count) + args + [name(file) for file in group]
+        return out
+
     if there:
         # one argument on a line: a line break inside one would cut it in two
-        lines = [' '.join(str(arg).splitlines()) for arg in args] + [p[1] for p in places]
-        code, out, err = _ssh(host, f'{there} -@ -', ('\n'.join(lines) + '\n').encode('utf-8'), timeout)
+        sent = [' '.join(line.splitlines()) for line in lines(lambda file: places[file][1])]
+        code, out, err = _ssh(host, f'{there} -@ -', ('\n'.join(sent) + '\n').encode('utf-8'), timeout)
         if code != 255:
-            return code, out, err, {p[1]: file for p, file in zip(places, files)}
+            return code, out, err, {places[file][1]: file for file in files}
         # (the server did not answer: do it here, and ask it again later)
         with _lock:
             _tools[host] = (time.time(), None)
     try:
-        res = subprocess.run(['exiftool'] + [str(arg) for arg in args] + files, capture_output=True,
+        res = subprocess.run(['exiftool'] + lines(lambda file: file), capture_output=True,
                              timeout=timeout)
     except subprocess.TimeoutExpired as exc:
         return 1, b'', str(exc), {}

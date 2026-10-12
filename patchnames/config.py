@@ -51,6 +51,8 @@ DEFAULTS = {
     'raw_app': 'Affinity',      # the application of the "Ouvrir avec" button of a raw file
     'geocode': True,            # ask OpenStreetMap for the place of a photo that has a position
     'gui_scan_faces': True,     # the search page looks for the faces of the photos in the background
+    'doc_eye_region': True,     # write where the eye of the bird is into the file, as an XMP
+                                #   region named "œil" (the index has it in any case)
     'doc_eyes_model': None,     # the model of the second look at a burst of bird photos (the
                                 #   eye of each frame); None: the same as the first look
     'people': [],               # the names the search page offers first for a face (your own

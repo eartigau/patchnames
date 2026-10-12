@@ -48,8 +48,10 @@ COLUMNS = ('name', 'path', 'stem', 'ext',
                                #   said before he did; NULL if he never did
            'eye', 'clear', 'level',    # a bird photo, 1 to 5: the focus on the eye, how
                                        #   clear of branches the bird is, how close to eye level
-           'sharp', 'best',            # in a burst: the sharpness measured at the focus point
-                                       #   (1 for the sharpest frame), and 1 for its best frame
+           'sharp', 'best',            # in a burst: the sharpness measured on the eye (1 for
+                                       #   the sharpest frame), and 1 for its best frame
+           'eye_x', 'eye_y',           # where the eye of the bird is, from the left and from the
+                                       #   top, as fractions of the picture
            'people',           # the people the photographer named in the photo
            'guessed',          # those faces.py proposes, not confirmed
            'faces',            # how many faces were found in it; NULL if nobody looked
@@ -65,7 +67,7 @@ COLUMNS = ('name', 'path', 'stem', 'ext',
 TYPES = {'clock_offset': 'REAL', 'zone': 'REAL', 'focal': 'REAL', 'lat': 'REAL', 'lon': 'REAL',
          'bird': 'INTEGER', 'seq_n': 'INTEGER', 'rep': 'INTEGER', 'on_checklist': 'INTEGER',
          'eye': 'INTEGER', 'clear': 'INTEGER', 'level': 'INTEGER', 'faces': 'INTEGER',
-         'sharp': 'REAL', 'best': 'INTEGER'}
+         'sharp': 'REAL', 'best': 'INTEGER', 'eye_x': 'REAL', 'eye_y': 'REAL'}
 
 PHOTOS = ('(id INTEGER PRIMARY KEY, '
           + ', '.join(f'{column} {TYPES.get(column, "TEXT")}' for column in COLUMNS)
@@ -255,6 +257,18 @@ def thumb_path(name):
 
 def preview_path(name):
     return _image_path('previews', name)
+
+
+def eye_path(name):
+    """the eye of the bird of a photo at full resolution, for the loupe"""
+    return _image_path('eyes', name)
+
+
+def save_eye(img, name):
+    """keep the square around the eye of a photo (a PIL image)"""
+    path = eye_path(name)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    img.save(path, quality=88)
 
 
 def save_images(img, name, preview=False):
@@ -532,7 +546,7 @@ def facets(db):
 def sequence(db, seq):
     """the frames of a sequence, in order"""
     return [dict(row) for row in db.execute(
-        'SELECT name, path, taken, rep, eye, clear, level, sharp, best FROM photos '
+        'SELECT name, path, taken, rep, eye, clear, level, sharp, best, eye_x, eye_y FROM photos '
         'WHERE seq = ? ORDER BY taken, name', (seq,))]
 
 

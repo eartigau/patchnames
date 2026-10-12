@@ -10,6 +10,7 @@ The page (gui/index.html, app.js) asks for:
     /api/sequence?seq=       the frames of a sequence
     /api/checklist?sid=      an eBird checklist and its species
     /thumb/NAME /preview/NAME   the images of a photo
+    /eye/NAME                the eye of the bird of a photo at full resolution
     /api/reveal, /api/open   (POST) show a photo in the Finder, open it
     /api/describe            (POST) have Claude describe a sequence
     /api/write               (POST) write into its files what the index says
@@ -353,6 +354,33 @@ def _work(seq, ask, write=True):
         tell(state='error', error=str(exc))
 
 
+def _eye_file(name):
+    """the square around the eye of the bird of a photo, which the loupe of
+    the page shows: kept when the photo was described, made from the photo
+    itself otherwise if it can be reached; None when no eye is known"""
+    db = _db()
+    row = db.execute('SELECT path, eye_x, eye_y FROM photos WHERE name = ?', (name,)).fetchone()
+    db.close()
+    if row is None or row['eye_x'] is None or row['eye_y'] is None:
+        return None
+    path = photoindex.eye_path(name)
+    if os.path.isfile(path):
+        return path
+    full = photoindex.resolve(row['path'])
+    if not full:
+        return None
+    from .doc import _around, read_frame
+    with _making:
+        if not os.path.isfile(path):
+            try:
+                img = read_frame(full)[1]
+                photoindex.save_eye(_around(img, row['eye_x'] * img.width, row['eye_y'] * img.height),
+                                    name)
+            except Exception:
+                return None
+    return path if os.path.isfile(path) else None
+
+
 def _batch_add(names):
     """queue for Claude the sequences of these photos that have no
     description yet; what was queued and what was left out"""
@@ -527,6 +555,12 @@ class Handler(BaseHTTPRequestHandler):
                     self._file(path, cache=True)
                 else:
                     self._send(404, {'error': "pas d'image"})
+            elif url.path.startswith('/eye/'):
+                path = _eye_file(os.path.basename(unquote(url.path[len('/eye/'):])))
+                if path:
+                    self._file(path, cache=True)
+                else:
+                    self._send(404, {'error': "pas d'œil connu"})
             elif url.path == '/api/facets':
                 db = _db()
                 from .doc import _cost_guess

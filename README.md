@@ -387,6 +387,19 @@ l'appel à Claude le demandent.
   de Claude ; l'écriture dans les fichiers, que le disque réseau rend bien
   plus lente, suit à part, une séquence après l'autre, avec sa propre ligne
   (« fichier 6 sur 11 »). Elle reprend toute seule si la page est relancée.
+- **La loupe sur l'œil.** Pour une photo d'oiseau dont l'œil a été trouvé,
+  passer le curseur sur la photo de la visionneuse, sur une vue de la bande
+  ou (après un instant) sur une tuile montre à côté du curseur un carré de
+  512 pixels autour de l'œil, à pleine résolution, avec sa note ; un
+  anneau marque l'œil sur la photo. S'il y a plusieurs oiseaux, c'est l'œil
+  du plus net. La position de l'œil est gardée dans la base (`eye_x`,
+  `eye_y`, en fractions de la photo) et écrite dans le fichier comme une
+  région XMP nommée « œil », de type Focus, dans le schéma des régions du
+  Metadata Working Group (celui des visages dans les logiciels photo) :
+  elle voyage avec le fichier, et `patchdoc index --exif` la relit.
+  `{"doc_eye_region": false}` ne l'écrit pas dans les fichiers. Les carrés
+  sont gardés à côté des vignettes ; une séquence décrite avant cette
+  version n'en a pas tant qu'elle n'est pas identifiée de nouveau.
 - **Corriger une identification.** Dans la visionneuse, sous « Espèces »,
   chaque espèce d'une séquence a un choix : une autre espèce de sa liste
   eBird, « Indéterminé », ou « + autre espèce… » pour en taper une (son nom

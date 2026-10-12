@@ -103,6 +103,10 @@ BEST = 'meilleure vue'
 #:  bird he could not name is called (its title, its keyword)
 VERIFIED = 'identification vérifiée'
 UNKNOWN_TITLE, UNKNOWN = 'Oiseau indéterminé', 'indéterminé'
+#: the name, in a file, of the region where the eye of the bird is
+EYE_NAME = 'œil'
+#: what the frames of a sequence may each have of their own
+OWN = ('eye', 'clear', 'level', 'best', 'eye_x', 'eye_y')
 #: the notes of a bird photo, 1 to 5: column of the index, key of Claude's
 #:  answer, name in the Lightroom hierarchy (Qualité|...), keyword
 NOTES = (('eye', 'oeil_net', 'Œil net', 'œil net'), ('clear', 'degage', 'Dégagement', 'dégagé'),
@@ -113,7 +117,9 @@ FIELDS = ['-DateTimeOriginal', '-OffsetTimeOriginal', '-Model', '-LensModel', '-
           '-LensInfo', '-Lens', '-FocalLength#', '-GPSLatitude#', '-GPSLongitude#',
           '-GPSAreaInformation', '-AFAreaXPosition', '-AFAreaYPosition', '-AFImageWidth',
           '-AFImageHeight', '-XMP-dc:Title', '-XMP-dc:Description', '-XMP-dc:Subject',
-          '-XMP-lr:HierarchicalSubject', '-XMP-iptcExt:Event', '-XMP-iptcExt:PersonInImage']
+          '-XMP-lr:HierarchicalSubject', '-XMP-iptcExt:Event', '-XMP-iptcExt:PersonInImage',
+          '-ImageSize', '-XMP-mwg-rs:RegionName', '-XMP-mwg-rs:RegionAreaX#',
+          '-XMP-mwg-rs:RegionAreaY#']
 
 #: a canonical name: YYMMDD_HHMMSS[_WHO]_NUM.ext
 NAME = re.compile(r'^(\d{6})_(\d{6})(?:_([A-Z]{2}))?_[^.]+\.(\w+)$')
@@ -150,7 +156,8 @@ Réponds par un objet JSON :
 - "oeil_net" : pour un oiseau, la netteté de la mise au point sur son œil, de 1 à 5, jugée sur l'agrandissement à pleine résolution : 5 = œil parfaitement net (reflet et détail des plumes autour de l'œil), 3 = acceptable, 1 = flou ; null si l'œil ne se voit pas ou s'il n'y a pas d'oiseau ;
 - "degage" : pour un oiseau, à quel point il est dégagé, de 1 à 5 : 5 = entier et sans rien devant lui, 3 = en partie masqué, 1 = presque caché par des branches ou des feuilles ; null sans oiseau ;
 - "hauteur_oeil" : pour un oiseau, à quel point la photo est prise à la hauteur de son œil, de 1 à 5 : 5 = appareil à sa hauteur, 3 = angle modéré, 1 = forte plongée ou contre-plongée (oiseau haut dans un arbre ou dans le ciel, ou vu de dessus) ; null sans oiseau ;
-- "vues" : s'il y a des planches « vues », une entrée par vue numérotée, pour trouver la meilleure de la rafale : {{"numero": "...", "oeil_visible": true si l'œil de l'oiseau se voit dans cette vue, "oeil_x" et "oeil_y": la position de cet œil dans la vue (pas dans la planche), en pourcentage de sa largeur depuis son bord gauche et de sa hauteur depuis son bord haut, de 0 à 100 (null si l'œil ne se voit pas ; s'il y a plusieurs oiseaux, celui sur lequel la mise au point est faite), "oeil_net": la netteté de l'œil de 1 à 5 jugée grossièrement sur cette vue réduite, 4 au plus (elle sera reprise à pleine résolution ; null si l'œil ne se voit pas), "degage": 1 à 5, "hauteur_oeil": 1 à 5}}, avec les mêmes échelles ; "degage" et "hauteur_oeil" valent null si l'oiseau n'est pas dans la vue. Les vues d'une rafale diffèrent (l'oiseau tourne la tête, passe derrière une branche, s'envole) : note chacune pour elle-même. [] sans ces planches ;
+- "oeil_x", "oeil_y" : pour un oiseau dont l'œil se voit, la position de cet œil dans la deuxième image (l'agrandissement à pleine résolution), en pourcentage de sa largeur depuis son bord gauche et de sa hauteur depuis son bord haut, de 0 à 100 ; s'il y a plusieurs oiseaux, l'œil de celui qui est le plus net ; null si aucun œil ne se voit dans cette image ou s'il n'y a pas d'oiseau ;
+- "vues" : s'il y a des planches « vues », une entrée par vue numérotée, pour trouver la meilleure de la rafale : {{"numero": "...", "oeil_visible": true si l'œil de l'oiseau se voit dans cette vue, "oeil_x" et "oeil_y": la position de cet œil dans la vue (pas dans la planche), en pourcentage de sa largeur depuis son bord gauche et de sa hauteur depuis son bord haut, de 0 à 100 (null si l'œil ne se voit pas ; s'il y a plusieurs oiseaux, l'œil de celui qui est le plus net), "oeil_net": la netteté de l'œil de 1 à 5 jugée grossièrement sur cette vue réduite, 4 au plus (elle sera reprise à pleine résolution ; null si l'œil ne se voit pas), "degage": 1 à 5, "hauteur_oeil": 1 à 5}}, avec les mêmes échelles ; "degage" et "hauteur_oeil" valent null si l'oiseau n'est pas dans la vue. Les vues d'une rafale diffèrent (l'oiseau tourne la tête, passe derrière une branche, s'envole) : note chacune pour elle-même. [] sans ces planches ;
 - "liste" : l'identifiant (S...) de la liste eBird à laquelle la séquence appartient, null s'il n'y en a pas ;
 - "note_ebird" : une phrase seulement si ce que tu vois ne s'accorde pas avec la liste eBird (espèce absente de la liste, autre espèce plus probable que celle notée) ; une chaîne vide "" quand la photo s'accorde avec la liste ou qu'il n'y a pas de liste."""
 
@@ -218,6 +225,8 @@ SCHEMA = {
         'oeil_net': {'type': ['integer', 'null']},
         'degage': {'type': ['integer', 'null']},
         'hauteur_oeil': {'type': ['integer', 'null']},
+        'oeil_x': {'type': ['number', 'null']},
+        'oeil_y': {'type': ['number', 'null']},
         'vues': {'type': 'array', 'items': {
             'type': 'object',
             'properties': {'numero': {'type': 'string'}, 'oeil_visible': {'type': 'boolean'},
@@ -233,8 +242,8 @@ SCHEMA = {
         'note_ebird': {'type': 'string'},
     },
     'required': ['titre', 'sujet', 'especes', 'habitat', 'description', 'certitude',
-                 'autres_mots_cles', 'oeil_net', 'degage', 'hauteur_oeil', 'vues', 'liste',
-                 'note_ebird'],
+                 'autres_mots_cles', 'oeil_net', 'degage', 'hauteur_oeil', 'oeil_x', 'oeil_y',
+                 'vues', 'liste', 'note_ebird'],
     'additionalProperties': False,
 }
 
@@ -520,9 +529,25 @@ def file_tags(answer, kept, checklist, position=True):
     if 'people' in kept:
         args += [f'-XMP-iptcExt:PersonInImage={name}' for name in people] or (
             ['-XMP-iptcExt:PersonInImage='])
+    if (kept.get('eye_x') is not None and kept.get('eye_y') is not None
+            and _cfg().get('doc_eye_region', True)):
+        args.append(eye_region(kept['eye_x'], kept['eye_y'], kept.get('_size')))
     if checklist:
         args += place_tags(checklist, position)
     return args
+
+
+def eye_region(x, y, size=None):
+    """the exiftool argument that writes into a file where the eye of the
+    bird is (fractions of the picture from its left and its top): a region
+    of the Metadata Working Group schema, the one of the face tags of photo
+    software, named "œil" and of type Focus. It is the square the loupe of
+    the search page shows when the size of the picture is known."""
+    wide, high = (EYE / size[0], EYE / size[1]) if size else (0.1, 0.15)
+    dims = f'AppliedToDimensions={{W={size[0]},H={size[1]},Unit=pixel}},' if size else ''
+    return ('-XMP-mwg-rs:RegionInfo={' + dims + 'RegionList=[{Area={'
+            + f'X={x:.4f},Y={y:.4f},W={min(wide, 1):.4f},H={min(high, 1):.4f},Unit=normalized'
+            + '},Name=' + EYE_NAME + ',Type=Focus}]}')
 
 
 def answer_of(row):
@@ -541,20 +566,31 @@ def answer_of(row):
             'certitude': row['certainty'] or 'sûre', 'autres_mots_cles': parts('keywords')}
 
 
-def write_files(args, names, rows, backup=True):
-    """write tags into files with exiftool, the latitude and longitude left
-    out for those that carry a position of their own; raises RuntimeError"""
-    position = [arg for arg in args if arg.startswith('-GPS')]
-    for group, extra in (([n for n in names if not own_position(rows.get(n, {}))], position),
-                         ([n for n in names if own_position(rows.get(n, {}))], [])):
-        if not group:
-            continue
-        # (on the server of the archive when it has exiftool: the files are
-        #   rewritten where they are, without coming here and going back)
-        code, _, err, _ = remote.run(['-q', '-m'] + ([] if backup else ['-overwrite_original'])
-                                     + [arg for arg in args if arg not in position] + extra, group)
+def write_groups(groups, rows, backup=True, most=40):
+    """write tags into files with exiftool, [(arguments, files)], each group
+    with its own tags, `most` groups to a run of exiftool (on the server of
+    the archive when it has exiftool: the files are rewritten where they
+    are, without coming here and going back). The latitude and longitude
+    are left out for the files that carry a position of their own; raises
+    RuntimeError."""
+    head = ['-q', '-m'] + ([] if backup else ['-overwrite_original'])
+    blocks = []
+    for args, names in groups:
+        position = [arg for arg in args if arg.startswith('-GPS')]
+        rest = [arg for arg in args if arg not in position]
+        for part, extra in (([n for n in names if not own_position(rows.get(n, {}))], position),
+                            ([n for n in names if own_position(rows.get(n, {}))], [])):
+            if part:
+                blocks.append((head + rest + extra, part))
+    for start in range(0, len(blocks), most):
+        code, _, err, _ = remote.run_many(blocks[start:start + most])
         if code != 0:
             raise RuntimeError(f'exiftool : {err.strip()[:300]}')
+
+
+def write_files(args, names, rows, backup=True):
+    """write the same tags into files (see write_groups)"""
+    write_groups([(args, names)], rows, backup)
 
 
 def from_file(row):
@@ -586,6 +622,14 @@ def from_file(row):
            **{column: _note(notes.get(label)) for column, _, label, _ in NOTES},
            'best': int('Meilleure vue' in under('Qualité')),
            'described': 'file', 'written': 'file'}
+    regions = _strings(row.get('RegionName'))
+    if EYE_NAME in regions:
+        at = regions.index(EYE_NAME)
+        try:
+            out['eye_x'] = float(_strings(row.get('RegionAreaX'))[at])
+            out['eye_y'] = float(_strings(row.get('RegionAreaY'))[at])
+        except (IndexError, ValueError):
+            pass
     if VERIFIED in subject:
         # (what was said before the photographer checked is not in the file)
         out['verified'] = out['species'] or UNKNOWN
@@ -619,8 +663,7 @@ def own_notes(seq, rows):
     'clear', 'level', 'best'}} (a sequence described before: every frame of
     a burst says its own)"""
     said = {name: from_file(rows.get(name, {})) for name in seq['names']}
-    return {name: {key: mine[key] for key in ('eye', 'clear', 'level', 'best')}
-            for name, mine in said.items() if mine}
+    return {name: {key: mine.get(key) for key in OWN} for name, mine in said.items() if mine}
 
 
 def stands_for(seq, notes):
@@ -666,19 +709,65 @@ def frame_records(seq, kept, rows, paths):
 # A burst of bird photos, frame by frame: which is the best of the lot
 # ---------------------------------------------------------------------------
 
-def _cut(img, row, size):
-    """a piece of a frame of this size in pixels around its focus point (the
-    Nikon AF area; the centre of the frame without it)"""
-    width, height = img.size
+def _focus(size, row):
+    """the focus point of a frame in a picture of this size (the Nikon AF
+    area; its centre without it)"""
+    width, height = size
     try:
-        cx = float(row['AFAreaXPosition']) / float(row['AFImageWidth']) * width
-        cy = float(row['AFAreaYPosition']) / float(row['AFImageHeight']) * height
+        return (float(row['AFAreaXPosition']) / float(row['AFImageWidth']) * width,
+                float(row['AFAreaYPosition']) / float(row['AFImageHeight']) * height)
     except (KeyError, TypeError, ValueError, ZeroDivisionError):
-        cx, cy = width / 2, height / 2
-    w, h = min(size[0], width), min(size[1], height)
-    left = int(min(max(cx - w / 2, 0), width - w))
-    top = int(min(max(cy - h / 2, 0), height - h))
+        return width / 2, height / 2
+
+
+def _box(size, row, want):
+    """the piece of `want` pixels of a frame around its focus point, in a
+    picture of `size`: (left, top, width, height)"""
+    (cx, cy), (width, height) = _focus(size, row), size
+    w, h = min(want[0], width), min(want[1], height)
+    return int(min(max(cx - w / 2, 0), width - w)), int(min(max(cy - h / 2, 0), height - h)), w, h
+
+
+def _focus_box(size, row):
+    """the piece keywords._focus_crop cuts: the second picture Claude is
+    shown of a sequence that is not a burst"""
+    (cx, cy), (width, height) = _focus(size, row), size
+    half_w, half_h = min(700, width / 2), min(467, height / 2)
+    cx, cy = min(max(cx, half_w), width - half_w), min(max(cy, half_h), height - half_h)
+    left, top = int(cx - half_w), int(cy - half_h)
+    return left, top, int(cx + half_w) - left, int(cy + half_h) - top
+
+
+def _cut(img, row, size):
+    """a piece of a frame of this size in pixels around its focus point"""
+    left, top, w, h = _box(img.size, row, size)
     return img.crop((left, top, left + w, top + h))
+
+
+def _around(picture, x, y, size=None):
+    """the square of a picture around a point of it, EYE pixels wide"""
+    size = min(size or EYE, picture.width, picture.height)
+    left = int(min(max(x - size / 2, 0), picture.width - size))
+    top = int(min(max(y - size / 2, 0), picture.height - size))
+    return picture.crop((left, top, left + size, top + size))
+
+
+def single_eye(answer, row, focus):
+    """where the eye is in a bird photo that is not part of a burst, from
+    what Claude says of the second picture it was shown (the crop at the
+    focus point, file `focus`; row['_size']: the size of the photo): its
+    place as fractions of the photo, {'eye_x', 'eye_y'}, and the square
+    around it for the loupe; (None, None) when no eye is named"""
+    from PIL import Image
+    try:
+        x, y, size = float(answer['oeil_x']), float(answer['oeil_y']), row['_size']
+        crop = Image.open(focus)
+    except (KeyError, TypeError, ValueError, OSError):
+        return None, None
+    left, top, _, _ = _focus_box(size, row)
+    x, y = min(max(x, 0), 100) / 100 * crop.width, min(max(y, 0), 100) / 100 * crop.height
+    return ({'eye_x': round((left + x) / size[0], 4), 'eye_y': round((top + y) / size[1], 4)},
+            _around(crop, x, y))
 
 
 def _detail(patch):
@@ -732,9 +821,10 @@ def burst_pictures(names, load, rows, tmpdir, index, keep=None, progress=None, j
     read is left out. Returns the paths and what eye_pictures and frame_notes
     need: {'sharp': {name: sharpness at the focus point}, 'shown': the
     sharpest frame, 'rated': the frames of the sheets, 'cuts': {name: file
-    of its cut at full resolution}}; raises RuntimeError when no frame can
-    be read."""
-    sharp, tiles, cuts = {}, {}, {}
+    of its cut at full resolution}, 'boxes': {name: where that cut is in the
+    frame, and the size of the frame}}; raises RuntimeError when no frame
+    can be read."""
+    sharp, tiles, cuts, boxes = {}, {}, {}, {}
     best, lock = {'name': None, 'img': None, 'size': None, 'read': 0}, threading.Lock()
 
     def measure(name):
@@ -754,6 +844,7 @@ def burst_pictures(names, load, rows, tmpdir, index, keep=None, progress=None, j
             best['size'] = best['size'] or (sorted(img.size) if img is not None else None)
             if img is not None and sorted(img.size) == best['size']:
                 sharp[name], tiles[name], cuts[name] = value, tile, file
+                boxes[name] = _box(img.size, rows.get(name, {}), TILE_CUT) + img.size
                 if best['name'] is None or value > sharp[best['name']]:
                     best['name'], best['img'] = name, img
             else:
@@ -784,18 +875,21 @@ def burst_pictures(names, load, rows, tmpdir, index, keep=None, progress=None, j
         paths.append(os.path.join(tmpdir, f'seq{index:03d}_vues{start // TILES}.jpg'))
         _sheet([(name, tiles[name]) for name in rated[start:start + TILES]], 4,
                TILE).save(paths[-1], quality=88)
-    return paths, {'sharp': sharp, 'shown': shown, 'rated': rated, 'cuts': cuts}
+    return paths, {'sharp': sharp, 'shown': shown, 'rated': rated, 'cuts': cuts, 'boxes': boxes}
 
 
 def eye_pictures(burst, answer, tmpdir, index):
     """the sheets "yeux" of a burst, for Claude's second look: the frames
     whose eye it found, at full resolution, a square around the eye; the
     EYES whose eye is the sharpest when there are more. Returns the paths
-    and the frames on them; burst['eye'] gets the sharpness measured on the
-    eye of every frame that shows one."""
+    and the frames on them. For every frame that shows an eye, burst['eye']
+    gets the sharpness measured on it, burst['spot'] where it is (fractions
+    of the frame, from the left and from the top) and burst['squares'] the
+    square around it, which the loupe of the search page shows."""
     from PIL import Image
     said = {str(view.get('numero', '')).strip(): view for view in answer.get('vues') or []}
-    squares, burst['eye'] = {}, {}
+    squares, burst['eye'], burst['spot'] = {}, {}, {}
+    burst['squares'] = squares
     for name in burst['rated']:
         view = said.get(_number(name)) or {}
         if not view.get('oeil_visible') or view.get('oeil_x') is None or view.get('oeil_y') is None:
@@ -807,15 +901,12 @@ def eye_pictures(burst, answer, tmpdir, index):
         except (OSError, TypeError, ValueError):
             continue
 
-        def around(size):
-            left = int(min(max(x - size / 2, 0), cut.width - size))
-            top = int(min(max(y - size / 2, 0), cut.height - size))
-            return cut.crop((left, top, left + size, top + size))
-
         # (the eye is near the middle of the square, not exactly there: the
         #   whole square is measured)
-        squares[name] = around(EYE)
+        squares[name] = _around(cut, x, y)
         burst['eye'][name] = _detail(squares[name])
+        left, top, _, _, width, height = burst['boxes'][name]
+        burst['spot'][name] = (round((left + x) / width, 4), round((top + y) / height, 4))
     eyes = sorted(sorted(squares, key=burst['eye'].get, reverse=True)[:EYES],
                   key=burst['rated'].index)
     paths = []
@@ -896,10 +987,11 @@ def frame_notes(names, burst, answer):
                 eye = min(5, max(1, round(judged[like] + SOFTER * (log(name) - log(like)))))
             else:
                 eye = min(_note(view.get('oeil_net')) or 0, 4) or None
+        spot = (burst.get('spot') or {}).get(name) or (None, None)
         notes[name] = {'eye': eye, 'clear': _note(view.get('degage')),
                        'level': _note(view.get('hauteur_oeil')),
                        'sharp': round(eye_sharp[name] / top, 3) if name in eye_sharp else None,
-                       'best': 0}
+                       'best': 0, 'eye_x': spot[0], 'eye_y': spot[1]}
     best = max(notes, key=lambda name: (2 * (notes[name]['eye'] or 0) + (notes[name]['clear'] or 0)
                                         + (notes[name]['level'] or 0) + (notes[name]['sharp'] or 0)))
     notes[best]['best'] = 1
@@ -907,12 +999,13 @@ def frame_notes(names, burst, answer):
 
 
 def _groups_of(names, notes):
-    """the frames of a sequence by the notes they share: [(notes, names)]"""
+    """the frames of a sequence by what they have of their own (their
+    notes, the place of their eye): [(that, names)]"""
     groups = {}
     for name in names:
         mine = notes.get(name) or {}
-        key = tuple((column, mine.get(column)) for column in ('eye', 'clear', 'level', 'best'))
-        groups.setdefault(key if mine else (), []).append(name)
+        key = tuple((column, mine[column]) for column in OWN if column in mine)
+        groups.setdefault(key, []).append(name)
     return [(dict(key), group) for key, group in groups.items()]
 
 
@@ -1253,6 +1346,9 @@ def document(gap=None, force=False, dry_run=False, index_only=False, backup=True
         staged = {}     # name as found -> {'thumb': path, 'preview': path}
 
         def keep(name, img, big):
+            if big:
+                # (the size of the photo, to say where its eye is: see single_eye)
+                rows.setdefault(name, {})['_size'] = img.size
             if dry_run:
                 return
             for kind, size in (('thumb', 360),) + ((('preview', 1600),) if big else ()):
@@ -1298,15 +1394,27 @@ def document(gap=None, force=False, dry_run=False, index_only=False, backup=True
             with lock:
                 spent['total'] += cost
             kept, checklist = settle(seq, answer, data)
+            eyes = {}       # the square around the eye of each frame, for the loupe
             if seq.get('burst'):
                 seq['notes'], seq['rep'] = frame_notes(seq['names'], seq['burst'], answer)
+                eyes = seq['burst'].get('squares') or {}
                 if seq['rep'] != seq['burst']['shown'] and not dry_run:
                     # the best frame stands for the sequence: its preview
                     keep(seq['rep'], _image(seq['rep'], big=True), True)
+            elif seq['bird']:
+                spot, square = single_eye(answer, rows.get(middle, {}), images[1])
+                if spot:
+                    seq['notes'], eyes = {middle: spot}, {middle: square}
+            if not dry_run:
+                for name, square in eyes.items():
+                    out = os.path.join(tmpdir, f'eye_{name}.jpg')
+                    square.save(out, quality=88)
+                    staged.setdefault(name, {})['eye'] = out
             if not (dry_run or index_only):
-                for notes, group in _groups_of(seq['names'], seq.get('notes') or {}):
-                    write_files(file_tags(answer, dict(kept, **notes), checklist), group, rows,
-                                backup)
+                size = rows.get(seq['burst']['shown'] if seq.get('burst') else middle, {}).get('_size')
+                write_groups([(file_tags(answer, dict(kept, _size=size, **notes), checklist), group)
+                              for notes, group in _groups_of(seq['names'], seq.get('notes') or {})],
+                             rows, backup)
                 kept['written'] = kept['described']
             if not dry_run:
                 thumbs(seq['names'])
@@ -1392,7 +1500,8 @@ def document(gap=None, force=False, dry_run=False, index_only=False, backup=True
             for name in seqs[index]['names']:
                 final = os.path.basename(paths.get(name, name))
                 for kind, target in (('thumb', photoindex.thumb_path(final)),
-                                     ('preview', photoindex.preview_path(final))):
+                                     ('preview', photoindex.preview_path(final)),
+                                     ('eye', photoindex.eye_path(final))):
                     if kind in staged.get(name, {}):
                         os.makedirs(os.path.dirname(target), exist_ok=True)
                         shutil.move(staged[name][kind], target)
@@ -1608,6 +1717,7 @@ def _archive_pictures(frames, full, tmpdir, row, sheet):
     from .keywords import _focus_crop
     middle = frames[len(frames) // 2]
     img = _image(full, big=True)
+    row['_size'] = img.size         # (to say where the eye is: see single_eye)
     photoindex.save_images(img, middle['name'], preview=True)
     paths = [os.path.join(tmpdir, 'middle.jpg'), os.path.join(tmpdir, 'focus.jpg')]
     small = img.copy()
@@ -1731,16 +1841,23 @@ def describe_sequence(seq_id, model=None, effort=None, sheet=12, progress=None):
             if progress:
                 progress(len(names), len(names), 'yeux')
             cost += judge_eyes(seq, answer, tmpdir, 0, model or cfg.get('keywords_model'))
+        # where the eye is in a bird photo that is not part of a burst
+        single = single_eye(answer, rows[middle['name']], images[1]) if bird and not seq.get(
+            'burst') else (None, None)
     kept, _ = settle(seq, answer, data)
     notes, best = {}, None
+    eyes = {middle['name']: single[1]} if single[0] else {}
     if seq.get('burst'):
         notes, best = frame_notes(names, seq['burst'], answer)
+        eyes = seq['burst'].get('squares') or {}
         if best != seq['burst']['shown']:
             # the best frame stands for the sequence: the viewer opens on it
             try:
                 photoindex.save_images(_image(where[best], big=True), best, preview=True)
             except Exception:
                 pass
+    for name, square in eyes.items():
+        photoindex.save_eye(square, name)       # (what the loupe of the page shows)
     # 'pending': the files do not hold it yet (write_sequence)
     records = []
     for name in names:
@@ -1748,6 +1865,9 @@ def describe_sequence(seq_id, model=None, effort=None, sheet=12, progress=None):
         if best:
             record.update(notes.get(name) or notes[best], rep=int(name == best),
                           best=int(name == best))
+        elif bird:
+            record.update(single[0] if single[0] and name == middle['name']
+                          else {'eye_x': None, 'eye_y': None})
         if name in exifs:
             record.update(camera=str(exifs[name].get('Model') or ''), lens=_lens(exifs[name]),
                           focal=_focal(exifs[name]) or None, zone=_zone(exifs[name]))
@@ -1873,29 +1993,33 @@ def write_sequence(seq_id, progress=None, chunk=6):
         raise RuntimeError("les fichiers sont hors d'atteinte (le disque d'archive est-il monté ?)")
     # the frames of a burst each have their notes: they are written by groups
     #   of frames that share them
-    notes = {frame['name']: {key: frame[key] for key in ('eye', 'clear', 'level', 'best')}
-             for frame in frames}
-    groups = [(file_tags(answer_of(row), dict(said, **mine), checklist), group)
-              for mine, group in _groups_of(todo, notes)]
+    notes = {frame['name']: {key: frame[key] for key in OWN} for frame in frames}
     # the frames of a sequence come from one camera: the middle one says
-    #   whether they carry a position of their own
+    #   whether they carry a position of their own, and how large they are
     middle = paths[todo[len(todo) // 2]]
-    own = own_position(read_exif([middle], fast=True).get(middle, {}))
+    seen = read_exif([middle], fast=True).get(middle, {})
+    own = own_position(seen)
     rows = {paths[name]: ({'GPSLatitude': 0} if own else {}) for name in todo}
+    try:
+        size = tuple(int(side) for side in str(seen.get('ImageSize') or '').split('x'))
+        said['_size'] = size if len(size) == 2 and all(size) else None
+    except ValueError:
+        said['_size'] = None
     db.execute("UPDATE photos SET written = 'pending' WHERE seq = ?", (seq_id,))
     db.commit()
     done = 0
-    for args, group in groups:
-        for start in range(0, len(group), chunk):
-            part = group[start:start + chunk]
-            write_files(args, [paths[name] for name in part], rows,
-                        backup=bool(cfg.get('gui_backup')))
-            db.execute(f'UPDATE photos SET written = ? WHERE name IN ({", ".join("?" * len(part))})',
-                       [datetime.now().isoformat(' ', 'seconds')] + part)
-            db.commit()
-            done += len(part)
-            if progress:
-                progress(done, len(todo))
+    for start in range(0, len(todo), chunk):
+        # (each frame its own tags, a few frames to a run of exiftool)
+        part = todo[start:start + chunk]
+        write_groups([(file_tags(answer_of(row), dict(said, **mine), checklist),
+                       [paths[name] for name in group]) for mine, group in _groups_of(part, notes)],
+                     rows, backup=bool(cfg.get('gui_backup')))
+        db.execute(f'UPDATE photos SET written = ? WHERE name IN ({", ".join("?" * len(part))})',
+                   [datetime.now().isoformat(' ', 'seconds')] + part)
+        db.commit()
+        done += len(part)
+        if progress:
+            progress(done, len(todo))
     db.close()
     return done
 
