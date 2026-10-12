@@ -60,13 +60,17 @@ COLUMNS = ('name', 'path', 'stem', 'ext',
            'match',            # 'inside' or 'near' the hours of the checklist
            'on_checklist',     # 1: every species named is on the checklist, 0: one is not
            'location', 'county', 'state', 'country', 'lat', 'lon',
-           'described',        # when Claude described it, ISO; NULL if it never did
+           'own_position',     # 1 when lat and lon are the position the photo carries itself
+                               #   (a phone) and the place is named from it, not from the
+                               #   checklist
+           'described',       # when Claude described it, ISO; NULL if it never did
            'written',          # when that was written into the file; 'pending' while it waits
            'place_norm')
 
 TYPES = {'clock_offset': 'REAL', 'zone': 'REAL', 'focal': 'REAL', 'lat': 'REAL', 'lon': 'REAL',
          'bird': 'INTEGER', 'seq_n': 'INTEGER', 'rep': 'INTEGER', 'on_checklist': 'INTEGER',
-         'eye': 'INTEGER', 'clear': 'INTEGER', 'level': 'INTEGER', 'faces': 'INTEGER',
+         'own_position': 'INTEGER',
+         'eye':'INTEGER', 'clear': 'INTEGER', 'level': 'INTEGER', 'faces': 'INTEGER',
          'sharp': 'REAL', 'best': 'INTEGER', 'eye_x': 'REAL', 'eye_y': 'REAL'}
 
 PHOTOS = ('(id INTEGER PRIMARY KEY, '
@@ -151,6 +155,11 @@ def connect():
     for column in COLUMNS:
         if column not in made:
             db.execute(f'ALTER TABLE photos ADD COLUMN {column} {TYPES.get(column, "TEXT")}')
+    if 'own_position' not in made:
+        # an index made before the column: the photos placed by their position
+        #   were those without a checklist
+        with db:
+            db.execute("UPDATE photos SET own_position = 1 WHERE match = 'gps'")
     _relative(db)
     return db
 

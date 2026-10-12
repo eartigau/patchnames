@@ -141,7 +141,9 @@ Comment cela marche :
   du lieu eBird de la liste. Cette position est celle du lieu, pas celle du
   photographe : `GPSAreaInformation` le dit (`eBird : nom du lieu`). Une
   photo qui porte déjà sa propre position (téléphone, appareil avec GPS) la
-  garde.
+  garde, et son lieu est nommé d'après cette position plutôt que d'après la
+  liste (voir « Les lieux des photos de cellulaire ») ; la liste reste son
+  événement.
 - **Vos explications** sont le même fichier que pour `patchnames keywords` :
   `~/.config/patchnames/keywords.md` (`--instructions` pour un autre).
 - Une séquence que Claude n'a pas pu décrire reste dans le dossier :
@@ -349,15 +351,25 @@ de la liste, photos d'oiseaux sans liste).
 
 ### Les lieux des photos de cellulaire
 
-Une photo qui porte sa propre position et n'a pas été prise pendant une
-liste eBird reçoit son lieu de cette position : le quartier, la ville, la
-province et le pays sont demandés à Nominatim, le géocodeur
-d'OpenStreetMap, ou viennent de votre propre lieu eBird s'il y en a un à
-moins de 300 m. Seule la position part en ligne, arrondie à environ 100 m ;
-chaque réponse est gardée dans la base. `"geocode": false` dans la config
-pour ne jamais rien demander. La position d'une photo n'est connue de la
-base que si `patchdoc` a traité la photo ou si `patchdoc index --exif` a lu
-son dossier.
+Une photo qui porte sa propre position la garde et reçoit son lieu de cette
+position, qu'elle ait été prise pendant une liste eBird ou non : le
+quartier, la ville, la province et le pays sont demandés à Nominatim, le
+géocodeur d'OpenStreetMap, ou viennent de votre propre lieu eBird s'il y en
+a un à moins de 300 m. Le lieu et la position d'une liste eBird ne servent
+qu'aux photos qui n'ont pas de position. Une photo de cellulaire prise
+pendant une liste reste liée à cette liste (ses espèces comme a priori, la
+liste comme événement), mais ni son lieu ni sa latitude et sa longitude
+n'en viennent ; si rien ne nomme sa position (en pleine nature, sans
+réseau), elle prend le nom du lieu de la liste et garde sa position.
+
+Seule la position part en ligne, arrondie à environ 100 m ; chaque réponse
+est gardée dans la base. `"geocode": false` dans la config pour ne jamais
+rien demander. La position d'une photo n'est connue de la base que si
+`patchdoc` a traité la photo ou si `patchdoc index --exif` a lu son
+dossier ; « Écrire dans les fichiers » la découvre aussi, et corrige alors
+le lieu dans la base. Pour les photos de cellulaire déjà indexées avec le
+lieu de leur liste : `patchdoc index --exif DOSSIER --force`, puis « Écrire
+dans les fichiers ».
 
 ### Les personnes
 

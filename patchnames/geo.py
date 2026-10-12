@@ -1,13 +1,16 @@
 """
 The name of a place from a position.
 
-A photo taken with a phone carries a latitude and a longitude but no place;
-one taken during an eBird checklist has the place of its checklist and needs
-nothing from here. For the others, spot() asks Nominatim, the geocoder of
-OpenStreetMap (https://nominatim.openstreetmap.org), for the neighbourhood,
-the town, the province and the country of the position, in French. If the
-position is within EBIRD_KM of one of the photographer's own eBird places,
-that name is kept as the place: it is the one the photographer uses.
+A photo taken with a phone carries a latitude and a longitude but no place.
+It keeps that position, and its place is named from it, whether or not it
+was taken during an eBird checklist: the place and the position of a
+checklist are for the photos that carry none. spot() asks Nominatim, the
+geocoder of OpenStreetMap (https://nominatim.openstreetmap.org), for the
+neighbourhood, the town, the province and the country of the position, in
+French. If the position is within EBIRD_KM of one of the photographer's own
+eBird places, that name is kept as the place: it is the one the photographer
+uses. A position nothing names (the open country, no network) takes the
+names of the checklist the photo was taken during, if there is one.
 
 What goes online is the position, rounded to a thousandth of a degree (about
 100 m), and nothing else. Each answer is kept in the index (table geocode)
@@ -37,12 +40,13 @@ _lock, _last = threading.Lock(), [0.0]
 
 
 class Spot:
-    """a place that is not a checklist: its names and its position"""
-    sid = None
+    """the place of a photo that carries its position: its names, that
+    position, and the checklist the photo was taken during (sid; None
+    without one)"""
 
-    def __init__(self, location, county, state, country, lat, lon):
+    def __init__(self, location, county, state, country, lat, lon, sid=None):
         self.location, self.county, self.state, self.country = location, county, state, country
-        self.lat, self.lon = lat, lon
+        self.lat, self.lon, self.sid = lat, lon, sid
 
 
 def reverse(lat, lon):
@@ -84,16 +88,20 @@ def reverse(lat, lon):
         db.close()
 
 
-def spot(lat, lon, data=None):
+def spot(lat, lon, data=None, during=None):
     """the place of a position, as a Spot: its names from Nominatim, and the
     name of the photographer's eBird place if one is right there (data: the
-    eBird checklists); None when nothing names it"""
+    eBird checklists); those of `during`, the checklist the photo was taken
+    during, when nothing else names it; None when nothing names it"""
     names = reverse(lat, lon)
     near = data.nearest(lat, lon, EBIRD_KM) if data else None
     if near:
         place = near[0]
         names = dict(names or {'county': place.county, 'state': place.state,
                                'country': place.country}, location=place.location)
+    if (not names or not names.get('location')) and during:
+        names = {'location': during.location, 'county': during.county, 'state': during.state,
+                 'country': during.country}
     if not names or not names.get('location'):
         return None
     return Spot(names['location'], names['county'], names['state'], names['country'], lat, lon)

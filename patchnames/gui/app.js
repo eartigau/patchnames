@@ -1024,8 +1024,8 @@ function info(photo) {
         title: "Toutes les photos prises ici", onclick: () => setFilter({ place: photo.location }) })));
     }
     if (region(photo)) out.push(el("p", { text: region(photo) }));
-    if (photo.match === "gps") {
-      out.push(el("p", { class: "mono", text: "Le lieu eBird le plus proche de la position de la photo." }));
+    if (photo.own_position || photo.match === "gps") {
+      out.push(el("p", { class: "mono", text: "Lieu nommé d'après la position que porte la photo." }));
     }
     if (photo.checklist) {
       const how = { inside: "photo prise pendant la liste", near: "photo prise à moins d'une heure de la liste",
