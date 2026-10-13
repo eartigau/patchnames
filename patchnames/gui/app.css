@@ -1011,12 +1011,134 @@ button:focus-visible,
 }
 
 .viewer-info h2 {
-  font-size: 1.25rem;
+  font-size: 1.3rem;
   line-height: 1.2;
   margin: 0 0 10px;
 }
 
+/* a species: its Latin name under the French one */
+.viewer-info .latin {
+  margin: -6px 0 12px;
+  color: var(--muted);
+  font-style: italic;
+}
+
+.viewer-info .lede {
+  color: #dbe6f7;
+  font-size: 0.94rem;
+  line-height: 1.55;
+}
+
+/* Claude and the files: the two buttons and what they say, set apart */
+.viewer-info .block {
+  margin: 12px 0 4px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(200, 220, 255, 0.1);
+  background: rgba(4, 8, 16, 0.45);
+}
+
+.viewer-info .block .actions {
+  margin-top: 0;
+}
+
+.viewer-info .block .mono {
+  margin-bottom: 0;
+}
+
+.viewer-info .block .mono:empty {
+  display: none;
+}
+
+/* a note out of five: as many dots lit */
+.rating {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: #d3dff2;
+  font-size: 0.76rem;
+}
+
+.rating .dots {
+  display: inline-flex;
+  gap: 3px;
+}
+
+.rating .dots i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(200, 220, 255, 0.2);
+}
+
+.rating .dots i.on {
+  background: currentColor;
+}
+
+.rating.good {
+  color: #6ce2ad;
+  border-color: rgba(108, 226, 173, 0.45);
+}
+
+.rating.warn {
+  color: #ffc46b;
+  border-color: rgba(255, 196, 107, 0.5);
+}
+
+/* where the photo was taken, on a small map; a click picks the place */
+.mini-map {
+  height: 136px;
+  margin: 8px 0 10px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  overflow: hidden;
+  background: #0a1424;
+  cursor: pointer;
+  isolation: isolate;
+}
+
+.mini-map .leaflet-control-attribution {
+  padding: 0 5px;
+  background: rgba(4, 8, 16, 0.6);
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.mini-map .leaflet-control-attribution a {
+  color: var(--muted);
+}
+
+/* when and with what: a line for each */
+.facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 5px 14px;
+  margin: 0 0 8px;
+}
+
+.facts dt {
+  padding-top: 2px;
+  color: var(--muted);
+  font-size: 0.7rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.facts dd {
+  margin: 0;
+  color: #d3dff2;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
 .viewer-info h3 {
+  display: flex;
+  align-items: center;
+  gap: 7px;
   margin: 14px 0 8px;
   padding-top: 12px;
   border-top: 1px solid rgba(200, 220, 255, 0.09);
@@ -1025,6 +1147,16 @@ button:focus-visible,
   font-weight: 500;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+}
+
+.viewer-info h3 .icon {
+  display: inline-flex;
+  color: var(--accent);
+}
+
+.viewer-info h3 svg {
+  width: 14px;
+  height: 14px;
 }
 
 .viewer-info p {

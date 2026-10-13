@@ -855,8 +855,10 @@ function show(name) {
 function noteBadges(photo) {
   const best = state.frames.find((frame) => frame.best);
   const frame = (best && state.frames.find((item) => item.name === state.shown)) || photo;
+  // a note out of five: as many dots lit
   const out = NOTES.filter(([key]) => frame[key]).map(([key, label]) =>
-    badge(`${label} ${frame[key]}/5`, frame[key] >= 4 ? "good" : frame[key] <= 2 ? "warn" : ""));
+    el("span", { class: "rating" + (frame[key] >= 4 ? " good" : frame[key] <= 2 ? " warn" : ""), title: `${label} : ${frame[key]} sur 5` },
+      label, el("span", { class: "dots" }, [1, 2, 3, 4, 5].map((n) => el("i", { class: n <= frame[key] ? "on" : "" })))));
   if (best && frame.best) out.push(badge("★ meilleure vue de la rafale", "good"));
   else if (best) {
     out.push(el("span", { class: "badge link", text: "→ meilleure vue", title: "Afficher la meilleure vue de la rafale",
@@ -1186,8 +1188,55 @@ async function listSpecies(photo, box) {
         el("span", { text: sp.francais }), el("span", { class: "n", text: sp.count })))));
 }
 
+// the headings of the panel of a photo, each with a small drawing
+const ICONS = {
+  people: '<circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17.5" cy="9" r="2.4"/><path d="M17 14.3c2.3.5 4 2.6 4 5.2"/>',
+  bird: '<path d="M20.2 12.2a6 6 0 0 0-8.5-8.5L5 10.5V19h8.5z"/><path d="M16 8 2 22M17.5 15H9"/>',
+  tag: '<path d="M3 11.5V4h7.5L21 14.5 14.5 21 3 11.5z"/><circle cx="7.6" cy="8.4" r="1.3"/>',
+  pin: '<path d="M12 21s7-6.2 7-11.5a7 7 0 0 0-14 0C5 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/>',
+  camera: '<path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/>',
+  file: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/>',
+};
+
+function heading(drawing, text) {
+  const icon = el("span", { class: "icon" });
+  // (constants of this page, nothing from the index)
+  icon.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICONS[drawing]}</svg>`;
+  return el("h3", {}, icon, text);
+}
+
+// a small map of where the photo was taken, in its panel. The panel is drawn
+// again as a job goes on: the map is kept as long as the place is the same.
+const mini = { key: "", node: null, map: null };
+
+function miniMap(photo) {
+  if (!window.L || photo.lat === null || photo.lat === undefined || photo.lon === null || photo.lon === undefined) return null;
+  const key = `${photo.lat},${photo.lon}`;
+  if (mini.key !== key) {
+    if (mini.map) mini.map.remove();
+    Object.assign(mini, { key, map: null, node: el("div", { class: "mini-map" }) });
+  }
+  const node = mini.node, at = [photo.lat, photo.lon];
+  node.title = photo.location ? "Toutes les photos prises ici : " + photo.location : "";
+  node.onclick = () => { if (photo.location) setFilter({ place: photo.location }); };
+  requestAnimationFrame(() => {
+    if (!node.isConnected) return;
+    if (mini.map) return mini.map.invalidateSize();
+    mini.map = L.map(node, { zoomControl: false, dragging: false, scrollWheelZoom: false, doubleClickZoom: false,
+                             boxZoom: false, keyboard: false, touchZoom: false }).setView(at, 10);
+    mini.map.attributionControl.setPrefix(false);
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "&copy; OpenStreetMap" }).addTo(mini.map);
+    L.circleMarker(at, { radius: 7, color: "#e8eef8", weight: 2, fillColor: "#62c2ff", fillOpacity: 0.95, interactive: false }).addTo(mini.map);
+  });
+  return node;
+}
+
 function info(photo) {
-  const out = [el("h2", { text: photo.title || "Pas encore décrite" })];
+  // a title that is a species: its French name, and its Latin name under it
+  const named = /^([^()]+) \(([^()]+)\)$/.exec(photo.title || "");
+  const out = named && split(photo.latin).includes(named[2])
+    ? [el("h2", { text: named[1] }), el("p", { class: "latin", text: named[2] })]
+    : [el("h2", { text: photo.title || "Pas encore décrite" })];
   const badges = [];
   if (photo.verified) {
     badges.push(badge("identification vérifiée par vous", "good"));
@@ -1200,7 +1249,7 @@ function info(photo) {
   if (photo.seq_n > 1) badges.push(badge(photo.seq_n + " vues"));
   if (badges.length) out.push(el("div", { class: "badges" }, badges));
   out.push(el("div", { class: "badges", id: "frameNotes" }, noteBadges(photo)));
-  if (photo.description) out.push(el("p", { text: photo.description }));
+  if (photo.description) out.push(el("p", { class: "lede", text: photo.description }));
   if (photo.note) out.push(el("p", { class: "note", text: "Par rapport à la liste : " + photo.note }));
   if (!photo.described) {
     out.push(el("p", { class: "mono", text: "Claude n'a pas décrit cette séquence. Ce qui est affiché vient de "
@@ -1213,7 +1262,7 @@ function info(photo) {
     const when = /^\d{4}-\d\d-\d\d \d\d:\d\d/.test(photo.written || "")
       ? ` le ${photo.written.slice(0, 10)} à ${photo.written.slice(11, 16)}` : "";
     const writable = photo.described || photo.checklist;
-    out.push(el("div", { class: "actions" },
+    out.push(el("div", { class: "block" }, el("div", { class: "actions" },
       el("button", { class: "pill go", type: "button", disabled: photo.busy && "disabled",
                      text: photo.doing === "describe" ? "Identification en cours…"
                        : photo.described ? "Identifier de nouveau avec Claude" : "Identifier la séquence avec Claude",
@@ -1231,7 +1280,7 @@ function info(photo) {
       el("p", { class: "mono", text: photo.job || (waits
         ? "Les fichiers attendent encore ce que dit la base ; l'écriture reprendra toute seule."
         : wrote ? (when ? `Écrit dans les fichiers${when}.` : "Les fichiers de la séquence portent déjà cette description.")
-        : writable ? "Pas encore écrit dans les fichiers." : "") }));
+        : writable ? "Pas encore écrit dans les fichiers." : "") })));
   } else if (photo.reachable === false) {
     out.push(el("p", { class: "mono", text: "Pour demander à Claude d'identifier la séquence ou écrire dans les fichiers, montez le disque d'archive." }));
   }
@@ -1239,7 +1288,7 @@ function info(photo) {
   // the people: names given by the photographer, names proposed, and the faces to name
   const people = split(photo.people), guessed = split(photo.guessed);
   if (state.facesCan || people.length || guessed.length) {
-    out.push(el("h3", { text: "Personnes" }));
+    out.push(heading("people", "Personnes"));
     if (people.length || guessed.length) {
       out.push(el("div", { class: "chips" },
         people.map((name) => el("span", { class: "chip", text: name, title: "Toutes les photos de cette personne", onclick: () => setFilter({ person: name }) })),
@@ -1260,7 +1309,7 @@ function info(photo) {
 
   const species = split(photo.species), latin = split(photo.latin);
   if (species.length || photo.bird || photo.topic === "oiseau") {
-    out.push(el("h3", { text: "Espèces" }));
+    out.push(heading("bird", "Espèces"));
     if (species.length) {
       out.push(el("div", { class: "chips" }, species.map((name, k) =>
         el("span", { class: "chip", text: latin[k] ? `${name} (${latin[k]})` : name, title: "Toutes les photos de cette espèce",
@@ -1270,17 +1319,19 @@ function info(photo) {
   }
   const words = [...split(photo.habitat), ...split(photo.keywords)];
   if (words.length) {
-    out.push(el("h3", { text: "Mots-clés" }), el("div", { class: "chips" }, words.map((word) =>
+    out.push(heading("tag", "Mots-clés"), el("div", { class: "chips" }, words.map((word) =>
       el("span", { class: "chip", text: word, onclick: () => setFilter({ q: word }) }))));
   }
 
   if (photo.location || photo.checklist) {
-    out.push(el("h3", { text: "Où" }));
+    out.push(heading("pin", "Où"));
     if (photo.location) {
       out.push(el("div", { class: "chips" }, el("span", { class: "chip", text: photo.location,
         title: "Toutes les photos prises ici", onclick: () => setFilter({ place: photo.location }) })));
     }
     if (region(photo)) out.push(el("p", { text: region(photo) }));
+    const map = miniMap(photo);
+    if (map) out.push(map);
     if (photo.own_position || photo.match === "gps") {
       out.push(el("p", { class: "mono", text: "Lieu nommé d'après la position que porte la photo." }));
     }
@@ -1302,16 +1353,20 @@ function info(photo) {
     }
   }
 
-  out.push(el("h3", { text: "Quand" }));
+  // when and with what: a line for each
   const offset = Number(photo.clock_offset || 0);
-  out.push(el("p", { class: "mono", text: (photo.local || photo.taken || "inconnu").slice(0, 16)
-    + (offset ? `  (horloge de l'appareil ${(photo.taken || "").slice(11, 16)}, décalée de ${offset > 0 ? "+" : ""}${offset} h)` : "") }));
-
-  const gear = [photo.camera, photo.lens, photo.focal && Math.round(photo.focal) + " mm"].filter(Boolean);
-  if (gear.length) out.push(el("h3", { text: "Appareil" }), el("p", { class: "mono", text: gear.join(" · ") }));
+  const facts = [
+    ["Date", (photo.local || photo.taken || "inconnue").slice(0, 16)],
+    offset && ["Horloge", `${(photo.taken || "").slice(11, 16)} à l'appareil, décalée de ${offset > 0 ? "+" : ""}${offset} h`],
+    photo.camera && ["Appareil", photo.camera],
+    photo.lens && ["Objectif", photo.lens],
+    photo.focal && ["Focale", Math.round(photo.focal) + " mm"],
+  ].filter(Boolean);
+  out.push(heading("camera", "Prise de vue"),
+    el("dl", { class: "facts" }, facts.flatMap(([label, value]) => [el("dt", { text: label }), el("dd", { text: value })])));
 
   const said = el("p", { class: "mono" });
-  out.push(el("h3", { text: "Fichier" }), el("p", { class: "mono", text: photo.path || photo.name }));
+  out.push(heading("file", "Fichier"), el("p", { class: "mono", text: photo.path || photo.name }));
   if (photo.reachable !== false) {
     // the buttons act on the frame on screen, which may not be the one of the tile
     const shown = () => state.shown || photo.name;
