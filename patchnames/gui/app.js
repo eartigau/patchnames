@@ -1052,6 +1052,7 @@ async function work(photo, what) {
   const say = (text, busy) => {
     photo.job = text;
     photo.busy = busy;
+    photo.doing = busy ? what : "";
     if (state.current === index) $("viewerInfo").replaceChildren(...info(photo));
   };
   const update = (fresh) => {
@@ -1206,18 +1207,31 @@ function info(photo) {
       + "son nom et de la liste eBird pendant laquelle elle a été prise." }));
   }
   if (photo.reachable && state.claude) {
+    // whether the files hold what the index says is said on the button itself:
+    // written (when), waiting, or not yet
+    const waits = photo.written === "pending", wrote = Boolean(photo.written) && !waits;
+    const when = /^\d{4}-\d\d-\d\d \d\d:\d\d/.test(photo.written || "")
+      ? ` le ${photo.written.slice(0, 10)} à ${photo.written.slice(11, 16)}` : "";
+    const writable = photo.described || photo.checklist;
     out.push(el("div", { class: "actions" },
       el("button", { class: "pill go", type: "button", disabled: photo.busy && "disabled",
-                     text: photo.described ? "Identifier de nouveau avec Claude" : "Identifier la séquence avec Claude",
+                     text: photo.doing === "describe" ? "Identification en cours…"
+                       : photo.described ? "Identifier de nouveau avec Claude" : "Identifier la séquence avec Claude",
                      title: "Un appel à Claude, environ 20 s (pour une rafale d'oiseau, chaque vue est d'abord lue et notée) ; la réponse est écrite dans la base et dans l'en-tête des fichiers de la séquence",
                      onclick: () => work(photo, "describe") }),
-      (photo.described || photo.checklist) && el("button", { class: "pill", type: "button", disabled: photo.busy && "disabled",
-                     text: "Écrire dans les fichiers",
-                     title: "Écrire dans l'en-tête des fichiers ce que la base sait de la séquence : description, lieu, latitude et longitude de la liste eBird (sans appeler Claude)",
+      writable && el("button", { class: "pill " + (wrote && !photo.doing ? "done" : "go"), type: "button", disabled: photo.busy && "disabled",
+                     text: photo.doing === "write" ? "Écriture en cours…"
+                       : wrote ? "✓ Déjà écrit dans les fichiers"
+                       : waits ? "Écrire dans les fichiers (en attente)" : "Écrire dans les fichiers",
+                     title: (wrote ? `Les fichiers de la séquence portent déjà ce que la base en sait${when ? " : écrit" + when : ""}. Un clic l'écrit de nouveau. `
+                       : waits ? "Les fichiers attendent encore ce que dit la base : l'écriture reprendra toute seule, un clic la fait tout de suite. "
+                       : "Ce que dit la base n'a pas encore été écrit dans ces fichiers. ")
+                       + "Ce qui s'écrit dans leur en-tête : description, lieu, latitude et longitude de la liste eBird (sans appeler Claude).",
                      onclick: () => work(photo, "write") })),
-      el("p", { class: "mono", text: photo.job || (photo.written === "pending"
+      el("p", { class: "mono", text: photo.job || (waits
         ? "Les fichiers attendent encore ce que dit la base ; l'écriture reprendra toute seule."
-        : photo.written ? "Les fichiers de la séquence portent cette description." : "") }));
+        : wrote ? (when ? `Écrit dans les fichiers${when}.` : "Les fichiers de la séquence portent déjà cette description.")
+        : writable ? "Pas encore écrit dans les fichiers." : "") }));
   } else if (photo.reachable === false) {
     out.push(el("p", { class: "mono", text: "Pour demander à Claude d'identifier la séquence ou écrire dans les fichiers, montez le disque d'archive." }));
   }

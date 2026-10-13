@@ -302,9 +302,33 @@ button:focus-visible,
   color: #fff;
 }
 
+/* what is already done, said on the button itself: green, and still a button */
+.pill.done {
+  padding: 6px 15px;
+  border-color: rgba(108, 226, 173, 0.55);
+  background: rgba(108, 226, 173, 0.09);
+  color: #6ce2ad;
+  font-weight: 500;
+}
+
+.pill.done:hover:not(:disabled) {
+  border-color: #6ce2ad;
+  box-shadow: 0 0 0 3px rgba(108, 226, 173, 0.14);
+  color: #a4f2cd;
+}
+
 .pill:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+/* a button of the viewer whose work is under way says so itself: not dimmed */
+.viewer-info .actions .pill.go:disabled,
+.viewer-info .actions .pill.go:disabled:hover {
+  opacity: 1;
+  border-color: rgba(98, 194, 255, 0.55);
+  color: #d2ecff;
+  cursor: progress;
 }
 
 .pill:disabled:hover {
