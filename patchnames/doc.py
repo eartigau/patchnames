@@ -1650,7 +1650,10 @@ def index_copy(root, gap=None):
     the index keeps that too (meta 'copy:' and the root)."""
     from . import dupes
     gap = _cfg()['keywords_gap'] if gap is None else gap
-    listed = dupes.listing(root)
+    listed = dupes.listing(root, sizes=False) if os.path.isdir(root) else {}
+    if not listed:
+        # (a drive that went away must not make every photo absent)
+        raise RuntimeError(f"{root} n'a donné aucun fichier (la copie est-elle branchée ?)")
     layout = re.compile(r'\d{4}_\d{2}/(oiseaux|autres)/[^/]+')
     db = photoindex.connect()
     try:

@@ -84,11 +84,12 @@ def _server(root):
     return (where[0], os.path.dirname(where[1])) if where else None
 
 
-def listing(root):
+def listing(root, sizes=True):
     """every file of an archive root, {path relative to it: (size,
     modification time)}, the folder of the duplicates left out. Asked of the
     server in one command when the root is mounted from one: through the
-    mount it would take hours."""
+    mount it would take hours. sizes=False: the paths alone ({path: None}),
+    without asking a drive of this machine about each file."""
     found = {}
     server = _server(root)
     if server:
@@ -104,6 +105,9 @@ def listing(root):
         for folder, _, names in os.walk(root):
             for name in names:
                 full = os.path.join(folder, name)
+                if not sizes:
+                    found[os.path.relpath(full, root)] = None
+                    continue
                 try:
                     stat = os.stat(full)
                 except OSError:

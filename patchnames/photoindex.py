@@ -571,13 +571,16 @@ ORDERS = {'new': _NEWEST,
                     f"COALESCE(NULLIF(p.people, ''), NULLIF(p.guessed, '')) COLLATE FOLDED, {_NEWEST}"}
 
 
-def search(db, sort='new', offset=0, limit=60, **filters):
+def search(db, sort='new', offset=0, limit=60, counts=True, **filters):
     """the sequences that pass the filters (see _where), as dicts, and what
-    they add up to: {'sequences', 'photos', 'species', 'places'}"""
+    they add up to: {'sequences', 'photos', 'species', 'places'} (None when
+    counts is False: a page after the first)"""
     where, args = _where(**filters)
     rows = db.execute(f'SELECT p.* FROM photos p WHERE {where} '
                       f'ORDER BY {ORDERS.get(sort, ORDERS["new"])} LIMIT ? OFFSET ?',
                       args + [int(limit), int(offset)]).fetchall()
+    if not counts:
+        return [dict(row) for row in rows], None
     totals = db.execute(
         f'SELECT COUNT(*) AS sequences, COALESCE(SUM(p.seq_n), 0) AS photos, '
         f"COUNT(DISTINCT NULLIF(p.location, '')) AS places FROM photos p WHERE {where}",

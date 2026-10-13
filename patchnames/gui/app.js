@@ -154,7 +154,8 @@ async function load(reset) {
   } else if (state.loading || state.done) {
     return;
   }
-  const token = state.token;
+  const token = state.token, from = state.offset;
+  let empty = false;        // a page without a photo, of a search that is not over
   state.loading = true;
   $("status").textContent = "Recherche…";
   const params = query();
@@ -168,19 +169,26 @@ async function load(reset) {
       state.items.push(photo);
       $("grid").append(tile(photo, state.items.length - 1));
     }
-    state.offset += data.photos.length;
-    state.done = data.photos.length < PAGE;
+    // (the view of a copy of the archive skips the photos that copy does not have)
+    state.offset = data.next === undefined ? state.offset + data.photos.length : data.next;
+    state.done = data.more === undefined ? data.photos.length < PAGE : !data.more;
     state.total = data.totals.sequences;
     totals(data.totals);
     batchButton();
+    empty = !data.photos.length && !state.done;
     $("status").textContent = state.items.length
       ? (state.done ? "" : `${number(state.items.length)} séquences affichées sur ${number(state.total)} ; faites défiler pour la suite.`)
-      : "Rien ne correspond. Élargissez un filtre ou essayez un autre mot.";
+      : empty ? "Recherche…" : "Rien ne correspond. Élargissez un filtre ou essayez un autre mot.";
   } catch (err) {
     if (token === state.token) $("status").textContent = "La recherche a échoué : " + err.message;
   } finally {
     if (token === state.token) state.loading = false;
   }
+  // a short page of a search that is not over (the view of a copy of the
+  // archive skips what that copy does not have): the next one follows while
+  // the end of the gallery is still on screen
+  if (token === state.token && !state.done && state.offset > from
+      && (empty || $("more").getBoundingClientRect().top < window.innerHeight + 800)) load(false);
 }
 
 /* ── The sequences shown, identified by Claude in the background ────── */
@@ -428,8 +436,10 @@ async function showInbox(data) {
         + ` (lue le ${look.read}).`
       : "";
     text = look.state === "error" ? `La lecture de ${shown.name} a échoué : ${look.error}`
-      : look.state === "reading" ? `Lecture de ce que contient ${shown.name}… ` + found
-      : found || `${shown.name} n'a pas encore été lue : tout ce que la base a de l'archive est montré.`;
+      : look.state === "reading" ? `Lecture de ce que contient ${shown.name}… `
+        + (found || "La galerie ne montre déjà que les photos qui s'y trouvent ; les totaux seront justes une fois la lecture finie.")
+      : found || `${shown.name} n'a pas encore été lue en entier : la galerie ne montre que les photos qui s'y trouvent, `
+        + "mais les totaux comptent toute l'archive. Un clic sur sa puce la lit.";
   } else if (where === "attente") {
     text = data.files
       ? `${plural(data.files, "photo attend", "photos attendent")} dans ${data.dirs.join(", ")}`

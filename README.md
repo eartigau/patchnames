@@ -477,10 +477,14 @@ l'appel à Claude le demandent.
   « Archive u5tb ». Un clic sur une copie branchée en fait la copie en
   usage, celle où la page lit, écrit et envoie les photos, et montre ce
   qu'elle contient : les photos de l'archive, moins celles que cette copie
-  n'a pas. Pour le savoir, la copie est relue en arrière-plan à chaque clic
-  (tous ses fichiers d'un coup ; une cinquantaine de secondes pour 250 000
-  fichiers sur un disque externe) ; la page montre d'abord ce que la
-  lecture d'avant avait trouvé. Les photos qu'elle a dans les dossiers de
+  n'a pas. Chaque photo affichée est cherchée sur cette copie même, et lue
+  là et nulle part ailleurs : la galerie ne montre jamais une photo que la
+  copie n'a pas, même avant qu'elle ait été lue en entier. Pour que les
+  totaux et la carte soient justes aussi, la copie est relue en
+  arrière-plan à chaque clic, et après une copie d'un disque à l'autre
+  (tous ses fichiers d'un coup : d'une à quelques minutes pour 250 000
+  fichiers sur un disque externe, selon ce qu'il fait d'autre). Les photos
+  qu'elle a dans les dossiers de
   l'archive (`20AA_MM/oiseaux` ou `autres`, nom canonique) et que la base
   ne connaissait pas sont ajoutées d'après leur nom, comme `patchdoc
   index`. La ligne sous « Regarder » dit combien de photos de la base n'y

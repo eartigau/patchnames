@@ -146,6 +146,9 @@ _act, _act_stop = {'state': 'idle'}, threading.Event()
 #: sequences of a batch done at the same time (each reads and rewrites files
 #:  of the archive)
 BATCH_JOBS = 2
+#: photos looked for on a copy of the archive, at most, to fill one page of
+#:  what it holds (_held)
+LOOKED = 6000
 #: a batch that fails STREAK sequences in a row waits instead of failing all
 #:  it has left (Claude at its usage limit, the network or the drive gone):
 #:  HOLD minutes, twice as long each time in a row, an hour at most
@@ -176,15 +179,58 @@ def _names(db):
     return first + [name for name in known if name not in first]
 
 
-def _public(row):
+def _public(row, root=None):
     """a photo as the page gets it: its path where it can be read now, or as
-    the index keeps it (relative to the archive) when it cannot"""
+    the index keeps it (relative to the archive) when it cannot. root: the
+    copy of the archive the page looks at; a photo of the archive is then
+    looked for there and nowhere else."""
     out = {key: value for key, value in row.items() if key != 'place_norm'}
     out['country_name'] = country_name(row.get('country') or '') if row.get('country') else ''
-    full = photoindex.resolve(row.get('path'))
+    path = row.get('path')
+    if root and path and not os.path.isabs(path):
+        full = os.path.join(root, path)
+        full = full if os.path.exists(full) else None
+    else:
+        full = photoindex.resolve(path)
     out['reachable'] = bool(full)
-    out['path'] = full or row.get('path')
+    out['path'] = full or path
     return out
+
+
+def _held(db, root, offset, limit, **filters):
+    """a page of what a copy of the archive holds (its root is the filter
+    'place_of'): the search of the index, with each photo looked for on the
+    copy itself, so that the page never shows one the copy does not have,
+    whether the copy was listed yet or changed since (the listing,
+    doc.index_copy, is what tells the index). Returns (the photos, their
+    totals, where the search goes on from, whether more may follow)."""
+    from concurrent.futures import ThreadPoolExecutor
+    if not os.path.isdir(root):
+        # (the copy is not there: what the index knows of it, out of reach)
+        rows, totals = photoindex.search(db, offset=offset, limit=limit, **filters)
+        return rows, totals, offset + len(rows), len(rows) == limit
+    kept, totals, at, more = [], None, offset, True
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        while len(kept) < limit and at - offset < LOOKED:
+            size, start = (limit if totals is None else 600), at
+            rows, counts = photoindex.search(db, offset=at, limit=size, counts=totals is None,
+                                             **filters)
+            totals = totals or counts
+            there = pool.map(lambda row: os.path.exists(os.path.join(root, row['path'])), rows)
+            for row, found in zip(rows, there):
+                if len(kept) == limit:
+                    break       # (the rest of these waits for the next page)
+                at += 1
+                if found:
+                    kept.append(row)
+            if at - start == len(rows) < size:
+                more = False    # (the last photo of the search was looked at)
+                break
+    gone = at - offset - len(kept)
+    sizes = max(1, totals['photos'] // max(1, totals['sequences']))
+    totals = dict(totals, sequences=max(0, totals['sequences'] - gone),
+                  photos=max(0, totals['photos'] - gone * sizes))
+    return kept, totals, at, more
 
 
 def _raw_app():
@@ -396,6 +442,8 @@ def _sync_job(src, dst, go, known):
             # a copy of the index, which lives on this machine only, on both drives
             _sync.update(state='backup')
             _sync.update(saved=sync.backup([src, dst]))
+            if os.path.isdir(dst):
+                _look_start(dst)        # (what that copy holds has changed)
         _sync.update(state=ended, ended=time.time())
     except Exception as exc:
         _sync.update(state='error', error=str(exc), ended=time.time())
@@ -908,12 +956,19 @@ class Handler(BaseHTTPRequestHandler):
             elif url.path == '/api/search':
                 db = _db()
                 filters = {key: args[key] for key in FILTERS if args.get(key)}
-                rows, totals = photoindex.search(
-                    db, offset=int(args.get('offset') or 0),
-                    limit=min(int(args.get('limit') or 60), 200),
-                    listed=args.get('listed') == '1', **filters)
+                offset, limit = int(args.get('offset') or 0), min(int(args.get('limit') or 60), 200)
+                copy = filters.get('place_of', '')
+                if copy in photoindex.roots():
+                    # what one copy of the archive holds: looked for on the copy itself
+                    rows, totals, then, more = _held(db, copy, offset, limit,
+                                                     listed=args.get('listed') == '1', **filters)
+                    photos = [_public(row, copy) for row in rows]
+                else:
+                    rows, totals = photoindex.search(db, offset=offset, limit=limit,
+                                                     listed=args.get('listed') == '1', **filters)
+                    photos, then, more = [_public(row) for row in rows], offset + len(rows), len(rows) == limit
                 db.close()
-                self._send(200, {'photos': [_public(row) for row in rows], 'totals': totals})
+                self._send(200, {'photos': photos, 'totals': totals, 'next': then, 'more': more})
             elif url.path == '/api/places':
                 db = _db()
                 filters = {key: args[key] for key in FILTERS if args.get(key)}
