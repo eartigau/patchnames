@@ -1039,6 +1039,10 @@ button:focus-visible,
   overflow-wrap: anywhere;
 }
 
+.viewer-info .actions + .mono {
+  margin-top: 8px;
+}
+
 /* an address that leaves the page: underlined, so that it reads as a link */
 .viewer-info a.out {
   text-decoration: underline;
