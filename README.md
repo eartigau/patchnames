@@ -371,6 +371,45 @@ le lieu dans la base. Pour les photos de cellulaire déjà indexées avec le
 lieu de leur liste : `patchdoc index --exif DOSSIER --force`, puis « Écrire
 dans les fichiers ».
 
+### Sauvegarder la base sur GitHub
+
+La base de recherche (`photos.sqlite` : chaque description, note, lieu, nom
+et visage) ne vit que sur cette machine ; la copie entre les disques de
+l'archive en laisse une sur chacun. `patchdoc sauvegarde`, ou le bouton
+« Sauvegarder la base sur GitHub » en haut de la page, en met une de plus
+hors de la maison, sans les vignettes : une copie cohérente de la base,
+compressée avec gzip, puis chiffrée avec un mot de passe, envoyée dans un
+dépôt GitHub privé (`votre-compte/patchdoc-sauvegarde`, créé s'il n'existe
+pas ; config `backup_repo` pour un autre). Elle demande la commande `gh`,
+connectée à votre compte (`gh auth login`).
+
+- **Le mot de passe.** `patchdoc sauvegarde --mot-de-passe`, une fois : il
+  est tapé dans la commande `security` de macOS et gardé dans le trousseau,
+  jamais dans un fichier. Notez-le ailleurs aussi : sans lui, aucune
+  sauvegarde ne peut être relue.
+- **Ce qui part.** Le chiffrement se fait sur cette machine, avant l'envoi :
+  GitHub ne reçoit que ce qui ne se lit pas sans le mot de passe, et un
+  dépôt qui n'est pas privé est refusé quand même. Chaque sauvegarde est
+  relue avant d'être envoyée. Les cinq dernières sont gardées (config
+  `backup_keep`), comme fichiers d'une « release » du dépôt, pour que le
+  dépôt lui-même ne grossisse pas d'une sauvegarde entière à chaque fois.
+- **Relire une sauvegarde.** Le chiffrement est celui de la commande
+  `openssl` (AES-256-CBC, clé tirée du mot de passe par PBKDF2, 600 000
+  tours de SHA-256), que macOS et Linux ont déjà :
+
+  ```
+  gh release download sauvegardes -R votre-compte/patchdoc-sauvegarde
+  openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -md sha256 \
+      -in photos-AAAAMMJJ-HHMMSS.sqlite.gz.enc | gunzip > photos.sqlite
+  ```
+
+  ou `patchdoc sauvegarde --restaurer FICHIER`, qui écrit
+  `photos.restauree.sqlite` sans jamais toucher à la base en usage.
+
+Regarder une copie de l'archive à laquelle il manque des photos ne retire
+rien à la base : les descriptions, les notes et les noms de toutes les
+photos y restent, quelle que soit la copie branchée.
+
 ### Les personnes
 
 Claude ne reconnaît personne à son visage, avec ou sans photos de référence,

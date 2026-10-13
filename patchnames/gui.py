@@ -28,6 +28,8 @@ The page (gui/index.html, app.js) asks for:
     /api/inbox/act           (POST) put their hours right, name them, or send
                              them to the archive (inbox.py)
     /api/inbox/stop          (POST) end that after the file under way
+    /api/backup              the backup of the index on GitHub; (POST) make
+                             one and send it (backup.py)
     /api/faces?name=         the faces of a photo, looked for if nobody did
     /api/face                (POST) who a face is
     /api/pano                (POST) stitch a sequence into a panorama
@@ -136,6 +138,9 @@ _wake, _writing = threading.Event(), set()
 _sync, _sync_stop = {'state': 'idle'}, threading.Event()
 #: the look at the photos that wait to be sent to the archive (doc.index_inbox)
 _inbox = {'state': 'idle'}
+#: the backup of the index on GitHub (backup.py): 'idle', 'running' (with the
+#:  stage it is at), 'done' or 'error'
+_backup = {'state': 'idle'}
 #: the listing of what each copy of the archive holds (doc.index_copy), {root:
 #:  {'state': 'reading', 'done' or 'error', and what was found}}
 _looks = {}
@@ -364,6 +369,22 @@ def _copies():
     return {'copies': [dict(copy, server=bool(copy['remote']), look=_looked(copy['root']))
                        for copy in sync.copies()],
             'sync': state}
+
+
+def _backup_status():
+    """how the backup of the index goes, whether it has its password, and
+    what the last one was"""
+    from . import backup
+    return dict(_backup, password=backup.has_password(), last=backup.last())
+
+
+def _backup_job():
+    from . import backup
+    try:
+        backup.run(lambda stage: _backup.update(stage=stage))
+        _backup.update(state='done', error='')
+    except Exception as exc:
+        _backup.update(state='error', error=str(exc))
 
 
 def _looked(root):
@@ -991,6 +1012,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, _copies())
             elif url.path == '/api/inbox':
                 self._send(200, _inbox_status())
+            elif url.path == '/api/backup':
+                self._send(200, _backup_status())
             elif url.path == '/api/faces':
                 self._send(200, _faces(os.path.basename(args.get('name', ''))))
             else:
@@ -1009,7 +1032,7 @@ class Handler(BaseHTTPRequestHandler):
                 '/api/batch/stop', '/api/face', '/api/pano', '/api/archive/use',
                 '/api/archive/look', '/api/sync',
                 '/api/sync/stop', '/api/species', '/api/inbox', '/api/inbox/act',
-                '/api/inbox/stop'):
+                '/api/inbox/stop', '/api/backup'):
             self._send(403, {'error': 'refusé'})
             return
         try:
@@ -1044,6 +1067,15 @@ class Handler(BaseHTTPRequestHandler):
                         self._send(200, dict(_copies(), error='Une copie est déjà en cours.'))
                         return
                 self._send(200, _copies())
+                return
+            if self.path == '/api/backup':
+                with _lock:
+                    busy = _backup.get('state') == 'running'
+                    if not busy:
+                        _backup.update(state='running', stage='', error='')
+                if not busy:
+                    threading.Thread(target=_backup_job, daemon=True).start()
+                self._send(200, _backup_status())
                 return
             if self.path == '/api/inbox/act':
                 refused = _act_start(str(body.get('what')))

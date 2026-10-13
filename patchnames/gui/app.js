@@ -561,6 +561,38 @@ function showActions(data, shown) {
   $("inboxAct").textContent = text;
 }
 
+/* ── The backup of the index on GitHub ───────────────────────────────── */
+
+const backup = { timer: null };
+
+// the index lives on this machine: a button sends a copy of it, compressed
+// and encrypted with a password, to a private GitHub repository (backup.py)
+async function showBackup(data) {
+  clearTimeout(backup.timer);
+  if (!data) {
+    try { data = await (await fetch("/api/backup")).json(); } catch (err) { return; }
+  }
+  if (data.state === undefined) return;         // a server from before this
+  $("backup").hidden = false;
+  const busy = data.state === "running";
+  const stages = { copie: "copie de la base", compression: "compression", chiffrement: "chiffrement, et relecture pour vérifier",
+                   envoi: "envoi vers GitHub" };
+  $("backupActions").replaceChildren(el("button", {
+    class: "pill" + (data.password && !busy ? " go" : ""), type: "button", disabled: (busy || !data.password) && "disabled",
+    text: busy ? "Sauvegarde en cours…" : "Sauvegarder la base sur GitHub",
+    title: "Une copie de la base de recherche, sans les vignettes, compressée puis chiffrée avec votre mot de passe sur cette machine, "
+      + "est envoyée dans un dépôt GitHub privé. Les dernières sont gardées.",
+    onclick: async () => showBackup(await post("/api/backup")) }));
+  const last = data.last && data.last.when
+    ? `Dernière sauvegarde : ${data.last.when} (${size(data.last.bytes)}, chiffrée), dans le dépôt privé ${data.last.repo}.`
+    : "Aucune sauvegarde pour l'instant.";
+  $("backupStatus").textContent = busy ? `Sauvegarde : ${stages[data.stage] || "début"}…`
+    : data.state === "error" ? `La sauvegarde a échoué : ${data.error}. ${last}`
+    : !data.password ? "Donnez d'abord un mot de passe, une fois, dans un terminal : patchdoc sauvegarde --mot-de-passe. " + last
+    : last;
+  if (busy) backup.timer = setTimeout(showBackup, 1500);
+}
+
 /* ── The copies of the archive: which one is used, and rsync between them ── */
 
 // bytes as a size: 12345678 -> "12,3 Mo"
@@ -641,7 +673,7 @@ async function showArchive(data) {
     text = `La copie de ${pair} a échoué : ${job.error}`;
   }
   $("archiveActions").replaceChildren(
-    el("span", { class: "mono", text: busy || job.state === "planned" ? "" : "Copier ce qui est plus récent :" }), ...buttons);
+    el("span", { class: "label", text: busy || job.state === "planned" ? "" : "Copier le plus récent" }), ...buttons);
   // (the index lives on this machine only: a copy of it is left on the drives)
   if ((job.saved || []).length && ["done", "planned"].includes(job.state)) {
     text += ` Base de recherche sauvegardée sur ${job.saved.join(" et ")} (dossier patchdoc).`;
@@ -673,9 +705,13 @@ function tile(photo, index) {
       photo.on_checklist === 0 && el("span", { class: "mark alert", text: "≠" }),
       hasEye(photo) && loupeIcon((event) => loupe(event, photo))));
   const date = (photo.local || photo.taken || "").slice(0, 10);
+  // a title that is a species: its French name, and its Latin name on a line of its own
+  const named = /^([^()]+) \(([^()]+)\)$/.exec(photo.title || "");
+  const one = named && split(photo.latin).includes(named[2]);
   const figure = el("figure", { class: "gallery-item", onclick: () => openViewer(index) }, img, marks,
     el("figcaption", {}, photo.title
-      ? [el("div", { class: "name", text: photo.title }),
+      ? [el("div", { class: "name", text: one ? named[1] : photo.title }),
+         one && el("div", { class: "latin", text: named[2] }),
          el("div", { class: "where", text: [date, photo.location || region(photo)].filter(Boolean).join(" · ") })]
       // not described: the place stands for the title
       : [el("div", { class: "name none", text: photo.location || "Pas encore décrite" }),
@@ -1302,8 +1338,19 @@ async function start() {
     $("counts").textContent = "index : " + facets.index;
     return;
   }
-  $("counts").textContent = `${number(facets.total)} photos dans l'index, dont ${number(facets.described)} décrites`
-    + (facets.ebird ? ` · données eBird du ${facets.ebird.slice(0, 10)}` : " · pas de données eBird");
+  // what the index holds, as tiles next to the title: a count, and a bar for a share
+  const thumbs = facets.thumbs && facets.thumbs.total ? facets.thumbs : null;
+  const stat = (label, value, part, whole, title) => el("div", { class: "stat", title },
+    el("div", { class: "label", text: label }), el("div", { class: "value", text: value }),
+    whole ? el("div", { class: "meter" }, el("div", { style: `width:${Math.min(100, 100 * part / whole).toFixed(1)}%` })) : null);
+  const share = (part, whole) => `${number(part)} · ${Math.floor(100 * part / whole)} %`;
+  $("heroStats").replaceChildren(...[
+    stat("Photos", number(facets.total), 0, 0, "Les photos de la base : l'archive et celles qui attendent"),
+    stat("Décrites", share(facets.described, facets.total), facets.described, facets.total, "Les photos que Claude a décrites"),
+    thumbs && stat("Vignettes", share(thumbs.have, thumbs.total), thumbs.have, thumbs.total,
+      "Les séquences dont la vignette est gardée sur cette machine" + (thumbs.filling ? " ; les autres se font en arrière-plan" : "")),
+    stat("Données eBird", facets.ebird ? facets.ebird.slice(0, 10) : "aucune", 0, 0, "La date de l'export eBird dont viennent les listes"),
+  ].filter(Boolean));
   // (a server started before an update of patchdoc says less: relaunch it)
   state.claude = facets.claude;
   state.rawApp = facets.raw_app;
@@ -1318,16 +1365,13 @@ async function start() {
   $("viewerLoupe").replaceWith(Object.assign(loupeIcon(overViewer, "big"), { id: "viewerLoupe", hidden: true }));
   $("loupe").firstElementChild.addEventListener("error", hideLoupe);
   window.addEventListener("resize", drawFaces);
-  const store = facets.thumbs && facets.thumbs.total
-    ? ` · vignettes : ${number(facets.thumbs.have)} sur ${number(facets.thumbs.total)}`
-      + (facets.thumbs.filling ? " (les autres se font en arrière-plan)" : "")
-    : "";
+  $("drive").classList.toggle("ok", Boolean(facets.archive && facets.archive.mounted));
   $("drive").textContent = !facets.archive
     ? "Ce serveur date d'avant une mise à jour de patchdoc : arrêtez-le (Ctrl-C) et relancez `patchdoc gui`."
     : (facets.archive.mounted
-      ? `disque d'archive : monté (${facets.archive.mounted})`
-      : "disque d'archive : non monté. La recherche et les vignettes déjà faites restent disponibles ; "
-        + "ouvrir un fichier, faire une vignette ou appeler Claude demande le disque.") + store
+      ? `Disque d'archive monté : ${facets.archive.mounted}`
+      : "Disque d'archive non monté. La recherche et les vignettes déjà faites restent disponibles ; "
+        + "ouvrir un fichier, faire une vignette ou appeler Claude demande le disque.")
     // an archive on a server: exiftool is run there when it has one, which spares the trips of the files
     + (facets.remote || []).filter((server) => server.asked).map((server) => server.tool
       ? ` · exiftool tourne sur le serveur de l'archive (${server.host})`
@@ -1418,6 +1462,7 @@ async function start() {
   watchBatch();         // a batch started before the page was opened goes on
   showArchive();
   showInbox();
+  showBackup();
 }
 
 start().catch((err) => { $("status").textContent = "La page n'a pas pu démarrer : " + err.message; });

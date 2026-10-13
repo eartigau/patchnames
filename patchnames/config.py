@@ -62,6 +62,11 @@ DEFAULTS = {
                                 #   eye of each frame); None: the same as the first look
     'people': [],               # the names the search page offers first for a face (your own
                                 #   config file is the place for them)
+    # the backup of the index on GitHub (backup.py): the private repository it
+    #   goes to, 'account/name' (None: patchdoc-sauvegarde of the account gh is
+    #   logged in to), and how many backups are kept there
+    'backup_repo': None,
+    'backup_keep': 5,
     'pano_size': 3000,          # long side of the frames of a panorama when stitched; 0: full size
     # the eBird data (ebird.py)
     'ebird_dir': str(Path.home() / '.config' / 'patchnames' / 'ebird'),

@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>patchdoc &middot; recherche de photos</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230d1a2e'/%3E%3Ccircle cx='32' cy='34' r='15' fill='none' stroke='%2362c2ff' stroke-width='5'/%3E%3Ccircle cx='32' cy='34' r='5' fill='%236ce2ad'/%3E%3Crect x='22' y='11' width='20' height='8' rx='3' fill='%2362c2ff'/%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -29,26 +30,37 @@
   </div>
 
   <header class="hero">
-    <p class="eyebrow">Archive photo</p>
-    <h1>Trouver une photo</h1>
-    <p class="subtitle">Cherchez par esp&egrave;ce, lieu, date, sujet, ou n&rsquo;importe quel mot d&rsquo;une
-      description. Chaque tuile est une s&eacute;quence de prises de vue ; cliquez dessus pour la
-      description compl&egrave;te, sa liste eBird et ses fichiers.</p>
+    <div class="hero-top">
+      <div class="hero-text">
+        <p class="eyebrow">Archive photo</p>
+        <h1>Trouver une photo</h1>
+        <p class="subtitle">Cherchez par esp&egrave;ce, lieu, date, sujet, ou n&rsquo;importe quel mot d&rsquo;une
+          description. Chaque tuile est une s&eacute;quence de prises de vue ; cliquez dessus pour la
+          description compl&egrave;te, sa liste eBird et ses fichiers.</p>
+      </div>
+      <div class="stats-grid hero-stats" id="heroStats"></div>
+    </div>
     <p class="subtitle counts" id="counts"></p>
-    <p class="subtitle counts" id="drive"></p>
+    <p class="subtitle counts drive" id="drive"></p>
+    <section class="card hero-panel">
     <div class="archive" id="inbox" hidden>
-      <div class="row"><span class="mono">Regarder :</span><span id="inboxChoice" class="chips"></span></div>
+      <div class="row"><span class="label">Regarder</span><span id="inboxChoice" class="chips"></span></div>
       <p id="inboxStatus" class="mono"></p>
       <div class="row" id="inboxActions" hidden></div>
       <div id="inboxBar" class="progress" hidden><div id="inboxFill"></div></div>
       <p id="inboxAct" class="mono"></p>
     </div>
     <div class="archive" id="archive" hidden>
-      <div class="row"><span class="mono">Copies de l&rsquo;archive :</span><span id="archiveCopies" class="chips"></span></div>
+      <div class="row"><span class="label">Copies de l&rsquo;archive</span><span id="archiveCopies" class="chips"></span></div>
       <div class="row" id="archiveActions"></div>
       <div id="syncBar" class="progress" hidden><div id="syncFill"></div></div>
       <p id="syncStatus" class="mono"></p>
     </div>
+    <div class="archive" id="backup" hidden>
+      <div class="row"><span class="label">Sauvegarde de la base</span><span id="backupActions" class="chips"></span></div>
+      <p id="backupStatus" class="mono"></p>
+    </div>
+    </section>
   </header>
 
   <main class="layout">

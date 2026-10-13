@@ -2347,7 +2347,20 @@ def main():
                               "(rien n'est effacé) et mettre les JPG et DNG à l'heure de leur NEF ; "
                               'sans cela, seulement dire ce qui serait fait.')
 
+    p_backup = sub.add_parser(
+        'sauvegarde', help='Sauvegarder la base de recherche sur GitHub, dans un dépôt privé : '
+                           'compressée et chiffrée avec un mot de passe, sans les vignettes.')
+    p_backup.add_argument('--mot-de-passe', dest='password', action='store_true',
+                          help='Demander le mot de passe des sauvegardes et le garder dans le '
+                               'trousseau de macOS (à faire une fois).')
+    p_backup.add_argument('--restaurer', metavar='FICHIER', default=None,
+                          help='Relire une sauvegarde téléchargée, dans photos.restauree.sqlite.')
+
     args = parser.parse_args()
+    if args.cmd == 'sauvegarde':
+        from . import backup
+        backup.main(set_it=args.password, back=args.restaurer)
+        return
     if args.cmd == 'doublons':
         from . import dupes
         dupes.main(folders=args.dossiers, move=args.deplacer)
