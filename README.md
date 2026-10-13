@@ -468,10 +468,38 @@ l'appel à Claude le demandent.
   ces photos relit les dossiers et ajoute à la base ce qui est nouveau,
   sans rien renommer ni déplacer. Elles s'identifient, se notent et se
   corrigent alors comme celles de l'archive, et ce qui est dit est écrit
-  dans leurs fichiers là où ils sont. Ensuite `patchdoc`, lancé dans leur
-  dossier, les renomme et les archive avec ce qui a été noté, sans rappeler
-  Claude ; la base suit. Une photo dont la base a déjà le nom ailleurs est
-  laissée de côté.
+  dans leurs fichiers là où ils sont. Ensuite les trois boutons ci-dessous,
+  ou `patchdoc` lancé dans leur dossier, les renomment et les archivent avec
+  ce qui a été noté, sans rappeler Claude ; la base suit. Une photo dont la
+  base a déjà le nom ailleurs est laissée de côté.
+- **Heures, noms, envoi vers l'archive.** Quand la page montre ces photos
+  qui attendent, trois boutons agissent sur leurs fichiers, un à la fois et
+  en arrière-plan, avec une barre de progression ; un premier clic dit ce
+  que le second fera.
+  - « Mettre à jour les heures » écrit dans les fichiers l'heure que
+    `patchdoc` a trouvée d'après vos listes eBird pour les photos dont
+    l'horloge de l'appareil était décalée (le bouton dit de combien, et
+    pour combien de photos) : les trois dates EXIF que déplace `patchnames
+    time-offset`, et le fuseau que l'appareil a enregistré, qui suit.
+    Chaque fichier prend ensuite le nom de sa nouvelle heure. Les photos
+    dont l'horloge était juste ne sont pas touchées (un cellulaire à côté
+    d'un appareil en retard d'une heure), ni un fichier qui n'est plus tel
+    que la base l'a lu. Un décalage que les listes ne révèlent pas se
+    corrige encore avec `patchnames time-offset`.
+  - « Mettre à jour les noms » donne à chaque fichier son nom canonique,
+    comme `patchnames`.
+  - « Envoyer vers l'archive » déplace chaque fichier vers la copie de
+    l'archive en usage (le bouton la nomme), dans le dossier de son mois,
+    sous `oiseaux` ou `autres` selon l'objectif, après lui avoir donné son
+    nom canonique. Les vidéos et les autres fichiers des extensions de la
+    config partent avec les photos.
+
+  Contrairement à `patchnames`, rien n'est effacé ni écrasé : un fichier
+  dont le nom est déjà pris, sur place ou dans l'archive, est laissé où il
+  est, et la page le dit. La base suit chaque fichier, avec sa description,
+  ses notes et ses vignettes. Ce qui est fait est ajouté à `inbox.log`,
+  dans le dossier de la base. Ces boutons attendent que Claude ait fini
+  d'identifier ces photos.
 - **La loupe sur l'œil.** Une photo d'oiseau dont l'œil a été trouvé porte
   une petite icône de loupe : sur sa tuile, sur la photo de la visionneuse
   et sur chaque vue de la bande. Le curseur sur cette icône (ou un clic)

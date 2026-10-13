@@ -376,7 +376,8 @@ async function watchBatch() {
 
 /* ── What the page looks at: the archive, or the photos that wait to go there ── */
 
-const inbox = { timer: null };
+// (armed, at: the button of its actions that was clicked once, and when)
+const inbox = { timer: null, armed: "", at: 0 };
 
 // at the top of the page: everything, the archive, or the photos that wait in
 // the folders of config 'inbox_dirs' (~/photo) to be sent to the archive.
@@ -413,12 +414,98 @@ async function showInbox(data) {
       ? `${plural(data.files, "photo attend", "photos attendent")} dans ${data.dirs.join(", ")}`
         + (data.new ? ` ; ${plural(data.new, "nouvelle", "nouvelles")}` : "")
         + (data.elsewhere ? ` ; ${plural(data.elsewhere, "laissée", "laissées")} de côté (la base a déjà ce nom ailleurs)` : "")
-        + ". Une fois décrites, `patchdoc` dans leur dossier les renomme et les archive avec ce qui a été noté."
+        + (data.plan ? ". Les boutons ci-dessous les mettent à l'heure, les renomment et les envoient à l'archive, avec ce qui a été noté."
+          : ". Une fois décrites, `patchdoc` dans leur dossier les renomme et les archive avec ce qui a été noté.")
       : `Aucune photo dans ${data.dirs.join(", ")}.`;
   }
   $("inboxStatus").textContent = text;
   if (data.state === "done" && inbox.was === "reading") load(true);      // what was just read
   inbox.was = data.state;
+  showActions(data, where === "attente" && data.state !== "reading");
+  const act = data.act || {};
+  if (act.state === "running" && data.state !== "reading") inbox.timer = setTimeout(showInbox, 1000);
+  if (act.state !== "running" && inbox.acted === "running") load(true);  // the files changed name or place
+  inbox.acted = act.state;
+}
+
+// the three buttons of the photos that wait: put their hours right, name
+// them, send them to the archive. A first click says what a second one does;
+// the work is done by the server, one action at a time, with a bar.
+function showActions(data, shown) {
+  const plan = data.plan, act = data.act || {};
+  $("inboxActions").hidden = !shown || !plan;       // (a server from before this has no plan)
+  if (!shown || !plan) {
+    $("inboxBar").hidden = true;
+    $("inboxAct").textContent = "";
+    return;
+  }
+  const running = act.state === "running";
+  const armed = (what) => inbox.armed === what && Date.now() - inbox.at < 8000;
+  const go = async (what) => {
+    if (!armed(what)) {
+      Object.assign(inbox, { armed: what, at: Date.now() });
+      return showActions(data, shown);
+    }
+    inbox.armed = "";
+    const reply = await post("/api/inbox/act", { what });
+    if (!reply.dirs) return;
+    await showInbox(reply);
+    if (reply.refused) $("inboxAct").textContent = reply.refused;
+  };
+  const clocks = plan.offsets.length === 1 ? "horloge " + plan.offsets[0][0]
+    : plan.offsets.map(([hours, count]) => `${hours} pour ${number(count)}`).join(", ");
+  const to = plan.archive.name;
+  const button = (what, text, confirm, title, can) => el("button", {
+    class: "pill" + (can && !running ? " go" : ""), type: "button", disabled: (running || !can) && "disabled",
+    text: armed(what) ? confirm : text, title, onclick: () => go(what) });
+  const buttons = [
+    button("times",
+      plan.retime ? `Mettre à jour les heures : ${plural(plan.retime, "photo", "photos")} (${clocks})` : "Les heures sont à jour",
+      `Confirmer : heure corrigée dans ${plural(plan.retime, "fichier", "fichiers")} (${clocks}), et noms refaits`,
+      "Écrire dans les fichiers l'heure que patchdoc a trouvée d'après vos listes eBird pour les photos dont l'horloge de l'appareil était décalée, "
+        + "puis leur donner le nom de leur nouvelle heure. Les photos dont l'horloge était juste ne sont pas touchées.",
+      plan.retime > 0),
+    button("names",
+      "Mettre à jour les noms" + (plan.odd ? ` : ${plural(plan.odd, "nom", "noms")} à refaire` : ""),
+      "Confirmer : chaque fichier prend le nom de sa date, de son heure et de son appareil",
+      "Donner à chaque fichier son nom canonique (AAMMJJ_HHMMSS_QUI_NUMÉRO), comme `patchnames`. Rien n'est effacé : "
+        + "un fichier dont le nom est déjà pris est laissé tel quel.",
+      plan.files > 0),
+    button("send",
+      plan.archive.mounted ? `Envoyer vers l'archive ${to} : ${plural(plan.files, "fichier", "fichiers")} (${size(plan.bytes)})`
+        : `L'archive ${to} n'est pas montée`,
+      `Confirmer : ${plural(plan.files, "fichier déplacé", "fichiers déplacés")} vers ${to}`
+        + (plan.retime ? ` ; attention, ${plural(plan.retime, "photo a", "photos ont")} encore une horloge décalée` : ""),
+      `Déplacer chaque fichier vers l'archive ${to}, dans le dossier de son mois, sous oiseaux ou autres selon l'objectif, `
+        + "après lui avoir donné son nom canonique. Un fichier déjà dans l'archive est laissé ici ; rien n'est écrasé.",
+      plan.files > 0 && plan.archive.mounted),
+  ];
+  if (running) buttons.push(el("button", { class: "pill", type: "button", text: "Arrêter", onclick: async () => showInbox(await post("/api/inbox/stop")) }));
+  $("inboxActions").replaceChildren(...buttons);
+
+  const left = act.left ? ` ${plural(act.left, "fichier laissé tel quel", "fichiers laissés tels quels")} : `
+    + (act.problems || []).join(" ; ") + (act.left > (act.problems || []).length ? " ; …" : "") + "." : "";
+  let text = "", share = 0;
+  if (running) {
+    share = act.what === "send" && act.all ? act.bytes / act.all : act.total ? act.done / act.total : 0;
+    const ahead = share > 0 && act.seconds >= 10 ? "reste environ " + clock(act.seconds * (1 - share) / share) : "";
+    text = (act.what === "times" ? [`Mise à l'heure : ${number(act.done)} sur ${plural(act.total, "photo", "photos")}`]
+      : act.what === "names" ? [`Noms : ${number(act.done)} sur ${plural(act.total, "fichier", "fichiers")}`,
+                                `${number(act.renamed || 0)} renommés`]
+      : [`Envoi vers ${act.to || to} : ${number(act.done)} sur ${plural(act.total, "fichier", "fichiers")}`,
+         act.all ? `${size(act.bytes)} sur ${size(act.all)}` : ""])
+      .concat([clock(act.seconds || 0) + " écoulées", ahead]).filter(Boolean).join(" · ") + ".";
+  } else if (act.state === "error") {
+    text = "L'action a échoué : " + act.error;
+  } else if (act.state === "done") {
+    text = (act.what === "times" ? `${plural(act.done, "photo mise", "photos mises")} à l'heure, ${number(act.renamed)} renommées.`
+      : act.what === "names" ? `${plural(act.renamed, "fichier renommé", "fichiers renommés")} sur ${number(act.total)} ; les autres avaient déjà leur nom.`
+      : `${plural(act.sent, "fichier envoyé", "fichiers envoyés")} vers l'archive ${act.to} en ${clock(act.seconds || 0)}.`)
+      + (act.stopped ? " Arrêté avant la fin." : "") + left;
+  }
+  $("inboxBar").hidden = !running;
+  $("inboxFill").style.width = (100 * Math.min(1, share)).toFixed(1) + "%";
+  $("inboxAct").textContent = text;
 }
 
 /* ── The copies of the archive: which one is used, and rsync between them ── */

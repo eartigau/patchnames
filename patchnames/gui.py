@@ -20,6 +20,11 @@ The page (gui/index.html, app.js) asks for:
                              description, in the background; (GET) how that
                              is going
     /api/batch/stop          (POST) drop the sequences still waiting
+    /api/inbox               the photos that wait to be sent to the archive;
+                             (POST) look at their folders again
+    /api/inbox/act           (POST) put their hours right, name them, or send
+                             them to the archive (inbox.py)
+    /api/inbox/stop          (POST) end that after the file under way
     /api/faces?name=         the faces of a photo, looked for if nobody did
     /api/face                (POST) who a face is
     /api/pano                (POST) stitch a sequence into a panorama
@@ -51,6 +56,12 @@ limit, the network or the drive gone) waits and tries again instead of
 failing all it has left, and a sequence that failed is tried once more after
 Claude has answered again.
 
+When the page shows the photos that wait to be sent to the archive, three
+buttons act on their files (inbox.py), one at a time and in the background:
+the hour the index found for the photos whose camera clock was off is
+written into them, every file takes its canonical name, and they are moved
+to the archive in use, each to its folder. The index follows the files.
+
 The server listens on 127.0.0.1 only, answers only to its own address (so
 that no other site can reach it through the browser), and the actions that
 touch the machine or call Claude take a photo of the index, never a path,
@@ -66,6 +77,7 @@ import sys
 import threading
 import time
 import webbrowser
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -116,6 +128,10 @@ _wake, _writing = threading.Event(), set()
 _sync, _sync_stop = {'state': 'idle'}, threading.Event()
 #: the look at the photos that wait to be sent to the archive (doc.index_inbox)
 _inbox = {'state': 'idle'}
+#: what a button of those photos is doing to them (inbox.py): 'idle',
+#:  'running', 'done' or 'error', with what ('times', 'names' or 'send') and
+#:  its counts; _act_stop ends it after the file under way
+_act, _act_stop = {'state': 'idle'}, threading.Event()
 #: sequences of a batch done at the same time (each reads and rewrites files
 #:  of the archive)
 BATCH_JOBS = 2
@@ -207,8 +223,13 @@ def _inbox_status():
     indexed = db.execute("SELECT COUNT(*), COUNT(DISTINCT seq) FROM photos WHERE path LIKE '/%'").fetchone()
     db.close()
     home = os.path.expanduser('~')
+    from . import inbox
+    act = dict(_act)
+    if act.get('started'):
+        act['seconds'] = round((act.get('ended') or time.time()) - act['started'])
     return dict(_inbox, dirs=[folder.replace(home, '~', 1) for folder in inbox_dirs()],
-                files=len(inbox_files()), photos=indexed[0], sequences=indexed[1])
+                files=len(inbox_files()), photos=indexed[0], sequences=indexed[1],
+                plan=inbox.plan(), act=act)
 
 
 def _inbox_job():
@@ -219,6 +240,62 @@ def _inbox_job():
         _inbox.update(found, state='done', error='')
     except Exception as exc:
         _inbox.update(state='error', error=str(exc))
+
+
+@contextmanager
+def _holding(seq):
+    """the files of a sequence, taken while a button of the photos that wait
+    renames or moves them (see _claim; None: a file the index does not have);
+    False when the action was stopped while it waited for them"""
+    mine = seq is None or _claim(seq, _act_stop)
+    try:
+        yield mine
+    finally:
+        if mine and seq is not None:
+            _release(seq)
+
+
+def _act_start(what):
+    """start one of the three actions on the photos that wait: 'times',
+    'names' or 'send'; why not, when it cannot start"""
+    if what not in ('times', 'names', 'send'):
+        return 'action inconnue'
+    if what == 'send' and not _archive()['mounted']:
+        return "L'archive n'est pas montée : rien ne peut y être envoyé."
+    db = _db()
+    waiting = {row[0] for row in db.execute("SELECT DISTINCT seq FROM photos WHERE path LIKE '/%'")}
+    db.close()
+    with _lock:
+        if _act.get('state') == 'running' or _inbox.get('state') == 'reading':
+            return 'Une action est déjà en cours sur ces photos.'
+        asked = (set(_batch['waiting']) | set(_batch['active']) | set(_batch['retry'])
+                 | {seq for seq, job in _jobs.items() if job.get('state') in ('running', 'writing')})
+        if waiting & asked:
+            return ("Claude est en train d'identifier certaines de ces photos : attendez qu'il "
+                    "ait fini, ou arrêtez-le.")
+        if what == 'send' and _sync.get('state') in ('planning', 'running', 'backup'):
+            return ("Une copie entre les disques de l'archive est en cours : attendez qu'elle "
+                    'soit finie.')
+        _act.clear()
+        _act.update(state='running', what=what, started=time.time(), done=0, total=0)
+    _act_stop.clear()
+    threading.Thread(target=_act_job, args=(what,), daemon=True).start()
+    return None
+
+
+def _act_job(what):
+    """one of the three actions on the photos that wait, with its counts as
+    it goes"""
+    from . import inbox
+    from .doc import index_inbox
+    try:
+        index_inbox()       # (the index has every photo that waits, to follow it)
+        found = getattr(inbox, what)(tell=_act.update, stop=_act_stop, hold=_holding)
+        _act.update(found, state='done', stopped=_act_stop.is_set(), ended=time.time())
+    except Exception as exc:
+        _act.update(state='error', error=str(exc), ended=time.time())
+    finally:
+        _wake.set()         # (what waited to be written into these files may be now)
 
 
 def _copies():
@@ -834,7 +911,8 @@ class Handler(BaseHTTPRequestHandler):
         if self.headers.get('X-Patchdoc') != '1' or self.path not in (
                 '/api/reveal', '/api/open', '/api/describe', '/api/write', '/api/batch',
                 '/api/batch/stop', '/api/face', '/api/pano', '/api/archive/use', '/api/sync',
-                '/api/sync/stop', '/api/species', '/api/inbox'):
+                '/api/sync/stop', '/api/species', '/api/inbox', '/api/inbox/act',
+                '/api/inbox/stop'):
             self._send(403, {'error': 'refusé'})
             return
         try:
@@ -867,9 +945,18 @@ class Handler(BaseHTTPRequestHandler):
                         return
                 self._send(200, _copies())
                 return
+            if self.path == '/api/inbox/act':
+                refused = _act_start(str(body.get('what')))
+                self._send(200, dict(_inbox_status(), refused=refused or ''))
+                return
+            if self.path == '/api/inbox/stop':
+                _act_stop.set()
+                self._send(200, _inbox_status())
+                return
             if self.path == '/api/inbox':
                 with _lock:
-                    busy = _inbox.get('state') == 'reading'
+                    # (not while their files are being renamed or moved)
+                    busy = _inbox.get('state') == 'reading' or _act.get('state') == 'running'
                     if not busy:
                         _inbox.update(state='reading', read=0, total=0, error='')
                 if not busy:

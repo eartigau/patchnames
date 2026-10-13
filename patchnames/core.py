@@ -9,6 +9,7 @@ Canonical filename format: YYMMDD_HHMMSS[_WHO]_FILENUM.ext
 import glob
 import hashlib
 import os
+import shlex
 import shutil
 import time
 
@@ -61,7 +62,7 @@ def get_exif(file, exif_folder=None):
     exif_path = os.path.join(exif_folder, checksum + '.csv')
 
     if not os.path.isfile(exif_path):
-        os.system(f'exiftool {file} > {exif_path}')
+        os.system(f'exiftool {shlex.quote(file)} > {shlex.quote(exif_path)}')
         if os.path.getsize(exif_path) < 100:
             time.sleep(0.02)
 
@@ -105,6 +106,17 @@ def get_exif(file, exif_folder=None):
         hdr['LENSINFO'] = hdr['LENSSPEC']
 
     return hdr
+
+
+def archive_folder(hdr):
+    """the folder of the archive a file goes to, from its EXIF (get_exif):
+    ('20YY_MM', 'oiseaux' for a photo taken with one of the lenses of config
+    'bird_lenses', 'autres' otherwise)"""
+    kind = 'autres'
+    if any(lens in hdr.get('LENSINFO', '') for lens in _cfg_get()['bird_lenses']):
+        kind = 'oiseaux'
+    name = hdr['REFERENCE NAME']
+    return '20' + name[0:2] + '_' + name[2:4], kind
 
 
 # ---------------------------------------------------------------------------
@@ -248,7 +260,6 @@ def patchnames(extensions=None, skip=()):
         extensions = cfg['extensions']
 
     photo_archive_root = _config_module.archive_root(cfg)
-    bird_lenses = cfg['bird_lenses']
 
     nef_to_dng()
 
@@ -283,13 +294,7 @@ def patchnames(extensions=None, skip=()):
             print(f'  {i + 1:5d}/{len(fics):5d}  {fic}')
             try:
                 hdr = get_exif(fic)
-
-                suffix = 'autres'
-                if 'LENSINFO' in hdr:
-                    for lens_key in bird_lenses:
-                        if lens_key in hdr['LENSINFO']:
-                            suffix = 'oiseaux'
-                            break
+                year_month, suffix = archive_folder(hdr)
 
                 target = hdr['REFERENCE NAME']
                 if fic != target:
@@ -307,7 +312,6 @@ def patchnames(extensions=None, skip=()):
                 moved.setdefault(found[fic], os.path.abspath(target))
 
                 if os.path.isdir(photo_archive_root):
-                    year_month = '20' + target[0:2] + '_' + target[2:4]
                     outdir = os.path.join(photo_archive_root, year_month, suffix)
                     os.makedirs(outdir, exist_ok=True)
                     os.system(f'mv -f "{target}" "{outdir}/"')

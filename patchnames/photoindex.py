@@ -328,6 +328,40 @@ def put(db, records):
     db.commit()
 
 
+def rename(db, moved):
+    """follow photos whose files changed name, place, or both: {name in the
+    index: path now}. Their rows keep all they hold; a sequence named after
+    a frame that changed name takes its new name, and the tags and the
+    images kept (thumbnail, preview, eye) follow. A photo that would take a
+    name the index already has is left as it is. Returns {name before: name
+    now} of the photos that changed name (their faces are for the caller:
+    faces.renamed)."""
+    done = {}
+    for old, path in moved.items():
+        new = os.path.basename(path)
+        row = db.execute('SELECT id, seq FROM photos WHERE name = ?', (old,)).fetchone()
+        if row is None or (new != old and db.execute('SELECT 1 FROM photos WHERE name = ?',
+                                                     (new,)).fetchone()):
+            continue
+        stem, before = os.path.splitext(new)[0], os.path.splitext(old)[0]
+        db.execute('UPDATE photos SET name = ?, stem = ?, ext = ?, path = ? WHERE id = ?',
+                   (new, stem, os.path.splitext(new)[1].lstrip('.').lower(), shorten(path),
+                    row['id']))
+        if new == old:
+            continue
+        db.execute('UPDATE tags SET name = ? WHERE name = ?', (new, old))
+        if row['seq'] == before:
+            db.execute('UPDATE photos SET seq = ? WHERE seq = ?', (stem, before))
+        for kept in (thumb_path, preview_path, eye_path):
+            if os.path.isfile(kept(old)) and not os.path.exists(kept(new)):
+                os.makedirs(os.path.dirname(kept(new)), exist_ok=True)
+                os.replace(kept(old), kept(new))
+        done[old] = new
+    _derive(db, done.values())
+    db.commit()
+    return done
+
+
 def forget(db, names):
     """take photos out of the index (a file renamed takes its new name)"""
     names = list(names)
