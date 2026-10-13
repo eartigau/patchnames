@@ -1274,10 +1274,12 @@ function info(photo) {
       const how = { inside: "photo prise pendant la liste", near: "photo prise à moins d'une heure de la liste",
                     other: "liste choisie par Claude parmi celles du jour" }[photo.match] || "";
       const box = el("div", {});
+      // the checklist on eBird: its address, written out, is the link
+      const url = "https://ebird.org/checklist/" + encodeURIComponent(photo.checklist);
       out.push(
-        el("p", {}, el("a", { href: "https://ebird.org/checklist/" + encodeURIComponent(photo.checklist),
-                              target: "_blank", rel: "noopener", text: "Liste eBird " + photo.checklist }),
-          how ? ` (${how})` : ""),
+        el("p", {}, `Liste eBird ${photo.checklist}` + (how ? ` (${how})` : "")),
+        el("p", { class: "mono" }, el("a", { class: "out", href: url, target: "_blank", rel: "noopener", text: url + " ↗",
+                                             title: "Ouvrir cette liste sur eBird, dans un nouvel onglet" })),
         el("div", { class: "actions" },
           el("button", { class: "pill", type: "button", text: "Ses espèces", onclick: () => listSpecies(photo, box) }),
           el("button", { class: "pill", type: "button", text: "Toutes ses photos",

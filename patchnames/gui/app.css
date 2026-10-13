@@ -1015,6 +1015,17 @@ button:focus-visible,
   overflow-wrap: anywhere;
 }
 
+/* an address that leaves the page: underlined, so that it reads as a link */
+.viewer-info a.out {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: rgba(98, 194, 255, 0.5);
+}
+
+.viewer-info a.out:hover {
+  text-decoration-color: var(--accent);
+}
+
 .badges,
 .chips {
   display: flex;
