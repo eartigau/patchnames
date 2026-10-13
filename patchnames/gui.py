@@ -20,6 +20,9 @@ The page (gui/index.html, app.js) asks for:
                              description, in the background; (GET) how that
                              is going
     /api/batch/stop          (POST) drop the sequences still waiting
+    /api/archive             the copies of the archive, and the copy from one
+                             to another
+    /api/archive/look        (POST) use a copy, and list what it holds
     /api/inbox               the photos that wait to be sent to the archive;
                              (POST) look at their folders again
     /api/inbox/act           (POST) put their hours right, name them, or send
@@ -61,6 +64,11 @@ buttons act on their files (inbox.py), one at a time and in the background:
 the hour the index found for the photos whose camera clock was off is
 written into them, every file takes its canonical name, and they are moved
 to the archive in use, each to its folder. The index follows the files.
+
+"Regarder" also names each copy of the archive when it has several: a click
+on one makes it the copy the page reads and writes, and shows what it holds,
+that is the photos of the archive less those a listing of the copy did not
+find there (doc.index_copy, done again in the background at each click).
 
 The server listens on 127.0.0.1 only, answers only to its own address (so
 that no other site can reach it through the browser), and the actions that
@@ -128,6 +136,9 @@ _wake, _writing = threading.Event(), set()
 _sync, _sync_stop = {'state': 'idle'}, threading.Event()
 #: the look at the photos that wait to be sent to the archive (doc.index_inbox)
 _inbox = {'state': 'idle'}
+#: the listing of what each copy of the archive holds (doc.index_copy), {root:
+#:  {'state': 'reading', 'done' or 'error', and what was found}}
+_looks = {}
 #: what a button of those photos is doing to them (inbox.py): 'idle',
 #:  'running', 'done' or 'error', with what ('times', 'names' or 'send') and
 #:  its counts; _act_stop ends it after the file under way
@@ -229,7 +240,7 @@ def _inbox_status():
         act['seconds'] = round((act.get('ended') or time.time()) - act['started'])
     return dict(_inbox, dirs=[folder.replace(home, '~', 1) for folder in inbox_dirs()],
                 files=len(inbox_files()), photos=indexed[0], sequences=indexed[1],
-                plan=inbox.plan(), act=act)
+                plan=inbox.plan(), act=act, copies=_copies()['copies'])
 
 
 def _inbox_job():
@@ -304,8 +315,38 @@ def _copies():
     state = dict(_sync)
     if state.get('started'):
         state['seconds'] = round((state.get('ended') or time.time()) - state['started'])
-    return {'copies': [dict(copy, server=bool(copy['remote'])) for copy in sync.copies()],
+    return {'copies': [dict(copy, server=bool(copy['remote']), look=_looked(copy['root']))
+                       for copy in sync.copies()],
             'sync': state}
+
+
+def _looked(root):
+    """what the last listing of a copy of the archive found there, or how the
+    one under way goes; {} for a copy never listed"""
+    if root in _looks:
+        return _looks[root]
+    try:
+        return dict(json.loads(photoindex.meta('copy:' + root) or '{}'))
+    except ValueError:
+        return {}
+
+
+def _look_start(root):
+    """list in the background what a copy of the archive holds, unless that
+    is under way"""
+    with _lock:
+        if _looks.get(root, {}).get('state') == 'reading':
+            return
+        _looks[root] = dict(_looked(root), state='reading')
+    threading.Thread(target=_look_job, args=(root,), daemon=True).start()
+
+
+def _look_job(root):
+    from .doc import index_copy
+    try:
+        _looks[root] = dict(index_copy(root), state='done')
+    except Exception as exc:
+        _looks[root] = {'state': 'error', 'error': str(exc)}
 
 
 def _sync_start(src, dst, go):
@@ -910,7 +951,8 @@ class Handler(BaseHTTPRequestHandler):
         # a header no other site can send without asking first, and never gets
         if self.headers.get('X-Patchdoc') != '1' or self.path not in (
                 '/api/reveal', '/api/open', '/api/describe', '/api/write', '/api/batch',
-                '/api/batch/stop', '/api/face', '/api/pano', '/api/archive/use', '/api/sync',
+                '/api/batch/stop', '/api/face', '/api/pano', '/api/archive/use',
+                '/api/archive/look', '/api/sync',
                 '/api/sync/stop', '/api/species', '/api/inbox', '/api/inbox/act',
                 '/api/inbox/stop'):
             self._send(403, {'error': 'refusé'})
@@ -921,20 +963,23 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, _batch_archive() if body.get('all')
                            else _batch_add(list(body.get('names') or [])))
                 return
-            if self.path in ('/api/archive/use', '/api/sync', '/api/sync/stop'):
+            if self.path in ('/api/archive/use', '/api/archive/look', '/api/sync',
+                             '/api/sync/stop'):
                 # (the copies of the archive are named by the config, never by the page)
                 roots = photoindex.roots()
                 if self.path == '/api/sync/stop':
                     _sync_stop.set()
                     if _sync.get('state') == 'planned':
                         _sync.update(state='idle')
-                elif self.path == '/api/archive/use':
+                elif self.path in ('/api/archive/use', '/api/archive/look'):
                     root = str(body.get('root'))
                     if root not in roots or not os.path.isdir(root):
                         self._send(200, dict(_copies(), error="Cette copie de l'archive n'est pas "
                                                                 'branchée.'))
                         return
                     _config_module.save({'photo_archive_use': root})
+                    if self.path == '/api/archive/look':
+                        _look_start(root)
                 else:
                     src, dst = str(body.get('src')), str(body.get('dst'))
                     if src not in roots or dst not in roots or src == dst:

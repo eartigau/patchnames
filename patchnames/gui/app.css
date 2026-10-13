@@ -467,6 +467,49 @@
   pointer-events: none;
 }
 
+/* the picture asked for is on its way: the one before it dims, under an
+   hourglass that turns over */
+.viewer-stage > img.stale {
+  opacity: 0.45;
+  transition: opacity 0.2s;
+}
+
+.viewer-wait {
+  position: absolute;
+  top: 42%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(4, 8, 16, 0.82);
+  color: var(--text, #e8eefc);
+  font-size: 0.85rem;
+  pointer-events: none;
+}
+
+.viewer-wait[hidden] {
+  display: none;
+}
+
+.viewer-wait span {
+  display: inline-block;
+  font-size: 1.2rem;
+  animation: hourglass 1.6s ease-in-out infinite;
+}
+
+@keyframes hourglass {
+  0%, 45% { transform: rotate(0deg); }
+  55%, 100% { transform: rotate(180deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .viewer-wait span { animation: none; }
+}
+
 /* the loupe: the eye of the bird at full resolution, next to the cursor;
    and a ring on the picture where that eye is */
 .loupe {

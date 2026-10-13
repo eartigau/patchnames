@@ -398,17 +398,38 @@ async function showInbox(data) {
     load(true);
   };
   const waiting = `${data.dirs[0] || "~/photo"} · pas encore archivé` + (data.photos ? ` (${number(data.photos)})` : "");
-  $("inboxChoice").replaceChildren(...[["", "Tout"], ["archive", "L'archive"], ["attente", waiting]].map(([value, label]) =>
-    el("span", { class: "chip" + (where === value ? " on" : ""), text: label,
-                 title: value === "attente" ? "Les photos posées dans " + data.dirs.join(", ") + " : les décrire et les noter avant de les envoyer à l'archive"
-                   : value ? "Seulement les photos déjà dans l'archive" : "L'archive et les photos qui attendent",
-                 onclick: () => choose(value) })));
+  // an archive that has several copies: each is a place to look at
+  const copies = (data.copies || []).length > 1 ? data.copies : [];
+  const chips = [["", "Tout", "L'archive et les photos qui attendent"]];
+  for (const copy of copies) {
+    chips.push([copy.root, `Archive ${copy.name}` + (copy.used ? " · en usage" : copy.mounted ? "" : " · pas branchée"),
+                copy.mounted ? `Ce que la copie ${copy.name} de l'archive contient ; la page lit et écrit alors sur cette copie (${copy.root})`
+                  : `${copy.root} n'est pas branchée`, copy]);
+  }
+  if (!copies.length) chips.push(["archive", "L'archive", "Seulement les photos déjà dans l'archive"]);
+  chips.push(["attente", waiting, "Les photos posées dans " + data.dirs.join(", ") + " : les décrire et les noter avant de les envoyer à l'archive"]);
+  $("inboxChoice").replaceChildren(...chips.map(([value, label, title, copy]) =>
+    el("span", { class: "chip" + (where === value ? " on" : copy && !copy.mounted ? " off" : ""), text: label, title,
+                 onclick: !copy ? () => choose(value) : copy.mounted ? () => lookAt(copy) : null })));
+  const shown = copies.find((copy) => copy.root === where), look = (shown && shown.look) || {};
   let text = "";
   if (data.state === "reading") {
     text = `Lecture des photos de ${data.dirs.join(", ")}…` + (data.total ? ` ${data.read} sur ${data.total}` : "");
     inbox.timer = setTimeout(showInbox, 1000);
   } else if (data.state === "error") {
     text = "La lecture a échoué : " + data.error;
+  } else if (shown) {
+    // what the copy holds, from the last time it was listed
+    const found = look.read
+      ? `Archive ${shown.name} : ${plural(look.photos, "photo", "photos")}`
+        + (look.new ? `, dont ${plural(look.new, "nouvelle", "nouvelles")} pour la base` : "")
+        + (look.absent ? ` ; ${plural(look.absent, "photo", "photos")} de la base n'y ${look.absent > 1 ? "sont" : "est"} pas` : "")
+        + (look.outside ? ` ; ${plural(look.outside, "image", "images")} de ses autres dossiers ${look.outside > 1 ? "ne sont" : "n'est"} pas dans la base` : "")
+        + ` (lue le ${look.read}).`
+      : "";
+    text = look.state === "error" ? `La lecture de ${shown.name} a échoué : ${look.error}`
+      : look.state === "reading" ? `Lecture de ce que contient ${shown.name}… ` + found
+      : found || `${shown.name} n'a pas encore été lue : tout ce que la base a de l'archive est montré.`;
   } else if (where === "attente") {
     text = data.files
       ? `${plural(data.files, "photo attend", "photos attendent")} dans ${data.dirs.join(", ")}`
@@ -424,8 +445,30 @@ async function showInbox(data) {
   showActions(data, where === "attente" && data.state !== "reading");
   const act = data.act || {};
   if (act.state === "running" && data.state !== "reading") inbox.timer = setTimeout(showInbox, 1000);
+  else if (look.state === "reading" && data.state !== "reading") inbox.timer = setTimeout(showInbox, 1500);
+  if (shown && look.state === "done" && inbox.looked === "reading") load(true);     // what the copy was just found to hold
+  inbox.looked = shown ? look.state : "";
   if (act.state !== "running" && inbox.acted === "running") load(true);  // the files changed name or place
   inbox.acted = act.state;
+}
+
+// show what a copy of the archive holds: the page reads and writes on that
+// copy from then on, and the server lists it again in the background
+async function lookAt(copy) {
+  const reply = await post("/api/archive/look", { root: copy.root });
+  if (reply.error) {
+    $("inboxStatus").textContent = reply.error === "refusé"
+      ? "Ce serveur date d'avant cette fonction : arrêtez-le (Ctrl-C) et relancez `patchdoc gui`."
+      : reply.error;
+    return;
+  }
+  $("place_of").value = copy.root;
+  if (!copy.used) {
+    history.replaceState(null, "", "?" + query());
+    return location.reload();         // (the photos are read from another drive: everything is asked again)
+  }
+  showInbox();
+  load(true);
 }
 
 // the three buttons of the photos that wait: put their hours right, name
@@ -540,11 +583,9 @@ async function showArchive(data) {
   $("archiveCopies").replaceChildren(...data.copies.map((copy) => el("span", {
     class: "chip" + (copy.used ? " on" : copy.mounted ? "" : " off"),
     text: copy.name + (copy.used ? " · utilisée" : copy.mounted ? "" : copy.server ? " · sur le serveur, pas montée" : " · pas branchée"),
-    title: copy.used ? "La page lit et écrit sur cette copie : " + copy.root
-      : copy.mounted ? "Utiliser cette copie : " + copy.root : copy.root,
-    onclick: copy.mounted && !copy.used && !busy
-      ? async () => { const reply = await archiveDo("/api/archive/use", { root: copy.root }); if (!reply.error) location.reload(); }
-      : null,
+    title: copy.used ? "La page lit et écrit sur cette copie ; un clic montre ce qu'elle contient : " + copy.root
+      : copy.mounted ? "Utiliser cette copie et voir ce qu'elle contient : " + copy.root : copy.root,
+    onclick: copy.mounted && !busy ? () => lookAt(copy) : null,
   })));
   // a copy can give or take when it is there, or when rsync can reach its server
   const there = (copy) => copy.mounted || copy.server;
@@ -738,9 +779,25 @@ function overViewer(event) {
 
 /* ── Viewer ─────────────────────────────────────────────────────────── */
 
+// an hourglass over the picture while the one asked for is on its way: a
+// frame whose preview is not kept is read from the photo itself, which takes
+// a while on a network drive, and the picture before it stays until then
+// (not for a picture that comes at once: the hourglass would only flicker)
+function waiting(on) {
+  clearTimeout(state.waits);
+  const mark = (there) => {
+    $("viewerWait").hidden = !there;
+    $("viewerImg").classList.toggle("stale", there);
+  };
+  if (on) state.waits = setTimeout(() => mark(true), 150);
+  else mark(false);
+}
+
 function show(name) {
   state.shown = name;       // the frame on screen: the one the file buttons act on
-  $("viewerImg").src = image("preview", name);
+  const url = image("preview", name);
+  if (new URL(url, location.href).href !== $("viewerImg").src) waiting(true);
+  $("viewerImg").src = url;
   loadFaces();
   for (const cell of $("viewerStrip").children) cell.classList.toggle("on", cell.dataset.name === name);
   showNotes();
@@ -815,6 +872,7 @@ async function openViewer(index) {
 
 function closeViewer() {
   hideLoupe();
+  waiting(false);
   $("viewer").hidden = true;
   $("viewerImg").src = "";
   document.body.style.overflow = "";
@@ -1243,6 +1301,7 @@ async function start() {
   state.names = facets.names || (facets.people || []).map(([name]) => name);
   state.panoCan = facets.pano;
   for (const [name] of facets.people || []) $("personList").append(el("option", { value: name }));
+  for (const ended of ["load", "error"]) $("viewerImg").addEventListener(ended, () => waiting(false));
   $("viewerImg").addEventListener("load", drawFaces);
   $("viewerImg").addEventListener("load", placeViewerLoupe);
   window.addEventListener("resize", placeViewerLoupe);

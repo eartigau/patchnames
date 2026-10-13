@@ -472,6 +472,23 @@ l'appel à Claude le demandent.
   ou `patchdoc` lancé dans leur dossier, les renomment et les archivent avec
   ce qui a été noté, sans rappeler Claude ; la base suit. Une photo dont la
   base a déjà le nom ailleurs est laissée de côté.
+- **Les copies de l'archive.** Quand l'archive a plusieurs copies (config
+  `photo_archive_mounts`), « Regarder » nomme chacune : « Archive urubu »,
+  « Archive u5tb ». Un clic sur une copie branchée en fait la copie en
+  usage, celle où la page lit, écrit et envoie les photos, et montre ce
+  qu'elle contient : les photos de l'archive, moins celles que cette copie
+  n'a pas. Pour le savoir, la copie est relue en arrière-plan à chaque clic
+  (tous ses fichiers d'un coup ; une cinquantaine de secondes pour 250 000
+  fichiers sur un disque externe) ; la page montre d'abord ce que la
+  lecture d'avant avait trouvé. Les photos qu'elle a dans les dossiers de
+  l'archive (`20AA_MM/oiseaux` ou `autres`, nom canonique) et que la base
+  ne connaissait pas sont ajoutées d'après leur nom, comme `patchdoc
+  index`. La ligne sous « Regarder » dit combien de photos de la base n'y
+  sont pas, et combien d'images de ses autres dossiers la base ne montre
+  pas (`patchdoc index --exif DOSSIER` pour celles-là).
+- **Le sablier.** Dans la visionneuse, une vue dont l'aperçu n'est pas
+  encore gardé est lue dans la photo elle-même, ce qui prend un moment sur
+  un disque réseau : un sablier le dit, sur la vue d'avant assombrie.
 - **Heures, noms, envoi vers l'archive.** Quand la page montre ces photos
   qui attendent, trois boutons agissent sur leurs fichiers, un à la fois et
   en arrière-plan, avec une barre de progression ; un premier clic dit ce

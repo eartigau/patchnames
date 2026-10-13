@@ -1591,6 +1591,24 @@ def index_archive(root=None, gap=None):
     known = photoindex.known(db)
     moved = [{'name': name, 'path': path} for name, (path, _) in found.items()
              if name in known and known[name][0] != photoindex.shorten(path)]
+    data = _ebird.load(quiet=False)
+    if data is None:
+        print('Pas de données eBird : les photos sont indexées sans lieu (voir `patchdoc ebird`).')
+    else:
+        photoindex.sync_ebird(db, data)
+    records, seqs = _from_names(found, known, gap, data)
+    print(f"{len(found)} photos dans l'archive : {len(records)} nouvelles pour l'index, "
+          f'{len(moved)} déplacées.')
+    photoindex.put(db, moved + records)
+    db.close()
+    placed = sum(1 for seq in seqs if seq['match'] and seq['match'].checklist)
+    print(f'{len(seqs)} séquences ajoutées, dont {placed} pendant une liste eBird.')
+
+
+def _from_names(found, known, gap, data):
+    """the records, for the index, of the photos of an archive it does not
+    know yet, from their names alone: found, {name: (path, bird)}, known, the
+    names it has. Returns (the records, their sequences)."""
     rows, new = {}, []
     for name, (path, bird) in found.items():
         parsed = NAME.match(name)
@@ -1606,27 +1624,63 @@ def index_archive(root=None, gap=None):
         rows[name] = {'DateTimeOriginal': when.strftime('%Y:%m:%d %H:%M:%S'), 'Model': who or '',
                       'bird': bird}
         new.append(name)
-    print(f"{len(found)} photos dans l'archive : {len(new)} nouvelles pour l'index, "
-          f'{len(moved)} déplacées.')
-    data = _ebird.load(quiet=False)
-    if data is None:
-        print('Pas de données eBird : les photos sont indexées sans lieu (voir `patchdoc ebird`).')
-    else:
-        photoindex.sync_ebird(db, data)
     seqs = sequences(new, rows, gap, lambda row: row.get('bird'))
     locate(seqs, data)
     paths = {name: found[name][0] for name in new}
-    records = list(moved)
+    records = []
     for seq in seqs:
         records += frame_records(seq, settle(seq, None, data)[0], rows, paths)
     for record in records:
         # the names say nothing of the camera
         for key in ('camera', 'lens', 'focal', 'zone'):
             record.pop(key, None)
-    photoindex.put(db, records)
-    db.close()
-    placed = sum(1 for seq in seqs if seq['match'] and seq['match'].checklist)
-    print(f'{len(seqs)} séquences ajoutées, dont {placed} pendant une liste eBird.')
+    return records, seqs
+
+
+def index_copy(root, gap=None):
+    """Look at what a copy of the archive holds, for the search page to show
+    it: every file of it is listed in one go (dupes.listing). The photos it
+    has in the folders of the archive (20YY_MM/oiseaux or /autres) that the
+    index did not know are added from their names, as `patchdoc index` does;
+    the photos of the index it does not have are noted (table absent of the
+    index). The paths the index has are left as they are. Returns {'files',
+    'photos', 'new', 'absent', 'outside', 'read'}: its files, the photos of
+    the index it holds, those just added, those it lacks, its pictures the
+    index does not show (other folders, other names), and when it was read;
+    the index keeps that too (meta 'copy:' and the root)."""
+    from . import dupes
+    gap = _cfg()['keywords_gap'] if gap is None else gap
+    listed = dupes.listing(root)
+    layout = re.compile(r'\d{4}_\d{2}/(oiseaux|autres)/[^/]+')
+    db = photoindex.connect()
+    try:
+        known = photoindex.known(db)
+        found = {}
+        for path in listed:
+            parsed, name = layout.fullmatch(path), os.path.basename(path)
+            if parsed and name not in known and name.lower().endswith(_extensions()):
+                found[name] = (os.path.join(root, path), parsed.group(1) == 'oiseaux')
+        data = _ebird.load()
+        if data:
+            photoindex.sync_ebird(db, data)
+        records, _ = _from_names(found, known, gap, data)
+        photoindex.put(db, records)
+        mine = ({path for path, _ in known.values()}
+                | {photoindex.shorten(record['path']) for record in records})
+        absent = [name for name, (path, _) in known.items()
+                  if path and not os.path.isabs(path) and path not in listed]
+        held = sum(1 for path, _ in known.values() if path and not os.path.isabs(path)) - len(absent)
+        db.execute('DELETE FROM absent WHERE copy = ?', (root,))
+        db.executemany('INSERT INTO absent VALUES (?, ?)', [(root, name) for name in absent])
+        out = {'files': len(listed), 'photos': held + len(records), 'new': len(records),
+               'absent': len(absent),
+               'outside': sum(1 for path in listed
+                              if path not in mine and path.lower().endswith(_extensions())),
+               'read': datetime.now().isoformat(' ', 'minutes')}
+        photoindex.set_meta(db, f'copy:{root}', json.dumps(out))
+        return out
+    finally:
+        db.close()
 
 
 def index_exif(folders, gap=None, force=False, chunk=200):

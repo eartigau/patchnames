@@ -99,6 +99,7 @@ CREATE TABLE IF NOT EXISTS observations {TABLES['observations']};
 CREATE INDEX IF NOT EXISTS observations_sid ON observations (sid);
 CREATE TABLE IF NOT EXISTS meta {TABLES['meta']};
 CREATE TABLE IF NOT EXISTS geocode (cell TEXT PRIMARY KEY, answer TEXT);
+CREATE TABLE IF NOT EXISTS absent (copy TEXT, name TEXT, PRIMARY KEY (copy, name)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS people (id INTEGER PRIMARY KEY, name TEXT UNIQUE, born TEXT);
 CREATE TABLE IF NOT EXISTS faces (id INTEGER PRIMARY KEY, photo TEXT, x REAL, y REAL, w REAL,
     h REAL, score REAL, vector BLOB, taken TEXT, person INTEGER, sure INTEGER DEFAULT 0,
@@ -477,6 +478,12 @@ def _where(q='', species='', listed=False, place='', region='', year='', since='
         where.append("p.path LIKE '/%'")
     elif place_of == 'archive':
         where.append("p.path NOT LIKE '/%'")
+    elif place_of.startswith('/'):
+        # what one copy of the archive holds (its root): the photos of the
+        #   archive, less those it was found not to have (doc.index_copy)
+        where.append("p.path NOT LIKE '/%' AND p.name NOT IN "
+                     '(SELECT name FROM absent WHERE copy = ?)')
+        args.append(place_of)
     if section == 'oiseaux':
         where.append(BIRDS)
     elif section == 'famille':
