@@ -546,13 +546,15 @@ l'appel à Claude le demandent.
     d'un appareil en retard d'une heure), ni un fichier qui n'est plus tel
     que la base l'a lu. Un décalage que les listes ne révèlent pas se
     corrige encore avec `patchnames time-offset`.
-  - « Mettre à jour les noms » donne à chaque fichier son nom canonique,
-    comme `patchnames`.
-  - « Envoyer vers l'archive » déplace chaque fichier vers la copie de
-    l'archive en usage (le bouton la nomme), dans le dossier de son mois,
-    sous `oiseaux` ou `autres` selon l'objectif, après lui avoir donné son
-    nom canonique. Les vidéos et les autres fichiers des extensions de la
-    config partent avec les photos.
+  - « Renommer comme patchnames » donne à chaque fichier son nom
+    canonique, comme `patchnames`.
+  - « Envoyer vers … » : un bouton pour chaque copie de l'archive (URUBU,
+    u5tb), actif si elle est là. Il déplace chaque fichier vers cette
+    copie, dans le dossier de son mois, sous `oiseaux` ou `autres` selon
+    l'objectif, après lui avoir donné son nom canonique. L'autre copie le
+    recevra à la prochaine copie d'un disque à l'autre ; d'ici là, la base
+    sait qu'elle ne l'a pas. Les vidéos et les autres fichiers des
+    extensions de la config partent avec les photos.
 
   Contrairement à `patchnames`, rien n'est effacé ni écrasé : un fichier
   dont le nom est déjà pris, sur place ou dans l'archive, est laissé où il
@@ -612,9 +614,12 @@ l'appel à Claude le demandent.
   première qui est là ; un clic sur une autre copie branchée la choisit, et
   `patchnames` et `patchdoc` y archivent alors aussi). Les boutons
   « A → B » et « B → A » portent vers une copie ce que l'autre a de plus
-  récent ou qu'elle n'a pas, avec rsync : la page compare d'abord et dit
-  combien de fichiers et quel volume, vous confirmez, puis une barre suit
-  la copie (fichiers, volume, débit, temps restant) et un bouton l'arrête.
+  récent ou qu'elle n'a pas, avec rsync : la page compare d'abord, avec
+  une barre comme celle de tqdm (« 42 % · 108 000 / 251 558 fichiers
+  [1:36 < 2:08, 1 125 fichiers/s] » ; le total est celui de la comparaison
+  ou de la lecture d'avant), et dit combien de fichiers et quel volume,
+  vous confirmez, puis une barre suit la copie (fichiers, volume, débit,
+  temps restant) et un bouton l'arrête.
   Un fichier n'est remplacé que par un plus récent, et rien n'est jamais
   effacé : faire les deux sens laisse à chaque copie le plus récent de
   tout. Une copie montée par sshfs est jointe par rsync directement sur son

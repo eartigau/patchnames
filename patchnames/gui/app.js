@@ -59,6 +59,7 @@ function disc(count, many, on) {
 
 // the discs of the places, the one chosen marked; a disc picks its place
 function drawPlaces() {
+  if (!chart.layer) return;         // (a search without a place: no map was made)
   const chosen = $("place").value.trim().toLowerCase();
   chart.layer.clearLayers();
   for (const [place, lat, lon, sequences, photos] of chart.places) {
@@ -500,14 +501,16 @@ function showActions(data, shown) {
       return showActions(data, shown);
     }
     inbox.armed = "";
-    const reply = await post("/api/inbox/act", { what });
+    const [action, root] = what.split("|");
+    const reply = await post("/api/inbox/act", root ? { what: action, root } : { what: action });
     if (!reply.dirs) return;
     await showInbox(reply);
     if (reply.refused) $("inboxAct").textContent = reply.refused;
   };
   const clocks = plan.offsets.length === 1 ? "horloge " + plan.offsets[0][0]
     : plan.offsets.map(([hours, count]) => `${hours} pour ${number(count)}`).join(", ");
-  const to = plan.archive.name;
+  // (a server from before the choice of the archive only sends to the one in use)
+  const archives = plan.archives || [Object.assign({ root: "", used: true }, plan.archive)];
   const button = (what, text, confirm, title, can) => el("button", {
     class: "pill" + (can && !running ? " go" : ""), type: "button", disabled: (running || !can) && "disabled",
     text: armed(what) ? confirm : text, title, onclick: () => go(what) });
@@ -519,19 +522,21 @@ function showActions(data, shown) {
         + "puis leur donner le nom de leur nouvelle heure. Les photos dont l'horloge était juste ne sont pas touchées.",
       plan.retime > 0),
     button("names",
-      "Mettre à jour les noms" + (plan.odd ? ` : ${plural(plan.odd, "nom", "noms")} à refaire` : ""),
+      "Renommer comme patchnames" + (plan.odd ? ` : ${plural(plan.odd, "nom", "noms")} à refaire` : ""),
       "Confirmer : chaque fichier prend le nom de sa date, de son heure et de son appareil",
       "Donner à chaque fichier son nom canonique (AAMMJJ_HHMMSS_QUI_NUMÉRO), comme `patchnames`. Rien n'est effacé : "
         + "un fichier dont le nom est déjà pris est laissé tel quel.",
       plan.files > 0),
-    button("send",
-      plan.archive.mounted ? `Envoyer vers l'archive ${to} : ${plural(plan.files, "fichier", "fichiers")} (${size(plan.bytes)})`
-        : `L'archive ${to} n'est pas montée`,
-      `Confirmer : ${plural(plan.files, "fichier déplacé", "fichiers déplacés")} vers ${to}`
+    // one button for each copy of the archive: the files go to the one chosen
+    ...archives.map((copy) => button("send|" + copy.root,
+      copy.mounted ? `Envoyer vers ${copy.name} : ${plural(plan.files, "fichier", "fichiers")} (${size(plan.bytes)})`
+        : `${copy.name} n'est pas ${copy.root.startsWith("/Volumes/") ? "branchée" : "montée"}`,
+      `Confirmer : ${plural(plan.files, "fichier déplacé", "fichiers déplacés")} vers l'archive ${copy.name}`
         + (plan.retime ? ` ; attention, ${plural(plan.retime, "photo a", "photos ont")} encore une horloge décalée` : ""),
-      `Déplacer chaque fichier vers l'archive ${to}, dans le dossier de son mois, sous oiseaux ou autres selon l'objectif, `
-        + "après lui avoir donné son nom canonique. Un fichier déjà dans l'archive est laissé ici ; rien n'est écrasé.",
-      plan.files > 0 && plan.archive.mounted),
+      `Déplacer chaque fichier vers la copie ${copy.name} de l'archive, dans le dossier de son mois, sous oiseaux ou autres selon l'objectif, `
+        + "après lui avoir donné son nom canonique. Un fichier déjà dans l'archive est laissé ici ; rien n'est écrasé. "
+        + "L'autre copie le recevra à la prochaine copie d'un disque à l'autre.",
+      plan.files > 0 && copy.mounted)),
   ];
   if (running) buttons.push(el("button", { class: "pill", type: "button", text: "Arrêter", onclick: async () => showInbox(await post("/api/inbox/stop")) }));
   $("inboxActions").replaceChildren(...buttons);
@@ -545,7 +550,7 @@ function showActions(data, shown) {
     text = (act.what === "times" ? [`Mise à l'heure : ${number(act.done)} sur ${plural(act.total, "photo", "photos")}`]
       : act.what === "names" ? [`Noms : ${number(act.done)} sur ${plural(act.total, "fichier", "fichiers")}`,
                                 `${number(act.renamed || 0)} renommés`]
-      : [`Envoi vers ${act.to || to} : ${number(act.done)} sur ${plural(act.total, "fichier", "fichiers")}`,
+      : [`Envoi vers ${act.to || "l'archive"} : ${number(act.done)} sur ${plural(act.total, "fichier", "fichiers")}`,
          act.all ? `${size(act.bytes)} sur ${size(act.all)}` : ""])
       .concat([clock(act.seconds || 0) + " écoulées", ahead]).filter(Boolean).join(" · ") + ".";
   } else if (act.state === "error") {
@@ -643,7 +648,19 @@ async function showArchive(data) {
   const pair = `${job.from_name} vers ${job.to_name}`;
   let text = data.error || "", bar = false;
   if (job.state === "planning") {
-    text = `Comparaison de ${job.from_name} et de ${job.to_name}… ${clock(job.seconds || 0)}`;
+    // a bar as tqdm draws one: the share, the count, [elapsed < left, pace]
+    const seen = job.seen || 0, seconds = job.seconds || 0;
+    const share = job.total ? Math.min(0.99, seen / job.total) : 0;
+    const pace = seconds >= 3 && seen ? seen / seconds : 0;
+    const left = pace && job.total > seen ? (job.total - seen) / pace : null;
+    bar = true;
+    $("syncFill").style.width = (100 * share).toFixed(1) + "%";
+    $("syncBar").classList.toggle("unknown", !job.total);
+    text = `Comparaison de ${job.from_name} et de ${job.to_name} : `
+      + (job.total ? `${Math.floor(100 * share)} % · ${number(seen)} / ${number(job.total)} fichiers` : `${number(seen)} fichiers`)
+      + ` [${clock(seconds)}` + (left === null ? "" : ` < ${clock(left)}`)
+      + (pace ? `, ${number(Math.round(pace))} fichiers/s` : "") + "]"
+      + (job.seen === undefined ? " (relancez `patchdoc gui` pour voir l'avancement)" : "");
     buttons.push(el("button", { class: "pill", type: "button", text: "Arrêter", onclick: () => archiveDo("/api/sync/stop") }));
   } else if (job.state === "planned") {
     text = job.files
@@ -655,6 +672,7 @@ async function showArchive(data) {
     }
     buttons.push(el("button", { class: "pill", type: "button", text: job.files ? "Annuler" : "D'accord", onclick: () => archiveDo("/api/sync/stop") }));
   } else if (job.state === "running") {
+    $("syncBar").classList.remove("unknown");
     const share = job.bytes ? Math.min(1, job.sent / job.bytes) : job.files ? Math.min(1, job.copied / job.files) : 0;
     const left = share > 0 && job.seconds >= 10 ? job.seconds * (1 - share) / share : null;
     bar = true;

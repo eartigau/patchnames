@@ -137,7 +137,10 @@ def command(src, dst, dry=False, cfg=None, skip=None):
     if far:
         cmd += ['-z', '-e', 'ssh -oBatchMode=yes -oConnectTimeout=20']
     if dry:
-        cmd += ['-n', '--stats']
+        # every file looked at is named, to say how far the comparison is: one
+        #   it would copy or that is the same (-ii), one the other side has
+        #   newer (skip1); an older rsync says all that with -vv
+        cmd += ['-n', '--stats'] + (['-ii', '--info=skip1'] if modern else ['-vv'])
     elif modern:
         cmd += ['--info=progress2', '--no-inc-recursive']
     else:
@@ -217,15 +220,48 @@ def _number(text):
     return int(digits) if digits else 0
 
 
-def plan(src, dst, skip=None):
+def plan(src, dst, skip=None, tell=None, stop=None):
     """what a copy from `src` to `dst` would bring, without copying:
-    {'files', 'bytes'}; raises RuntimeError"""
-    res = subprocess.run(command(src, dst, dry=True, skip=skip), capture_output=True, text=True)
-    if res.returncode != 0:
-        raise RuntimeError((res.stderr or res.stdout).strip()[-400:] or 'rsync a échoué')
-    files, size = FILES.search(res.stdout), BYTES.search(res.stdout)
+    {'files', 'bytes', 'seen'}, 'seen' being the files of `src` rsync looked
+    at; tell(seen) as it goes, stop: an Event that ends it (None is then
+    returned); raises RuntimeError"""
+    proc = subprocess.Popen(command(src, dst, dry=True, skip=skip), stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE)
+    seen, rest, said, last = 0, b'', [], 0.0
+    try:
+        while True:
+            if stop is not None and stop.is_set():
+                proc.terminate()
+                proc.wait(timeout=30)
+                return None
+            chunk = proc.stdout.read1(1 << 16)
+            if not chunk:
+                break
+            *lines, rest = (rest + chunk).split(b'\n')
+            for line in lines:
+                # a file rsync looked at: itemized ('>f++++++++++ path', '.f
+                #   path'), or left alone ('path is newer', 'path is uptodate')
+                code = line.split(b' ', 1)[0]
+                if line.endswith((b' is newer', b' is uptodate')) or (
+                        9 <= len(code) <= 13 and code[:1] in b'<>ch.*' and code[1:2] == b'f'):
+                    seen += 1
+                else:
+                    said.append(line)       # (its statistics are at the end)
+            if tell and time.time() - last > 0.3:
+                last = time.time()
+                tell(seen)
+        if tell:
+            tell(seen)
+        err = proc.stderr.read().decode('utf-8', 'replace')
+        text = b'\n'.join(said + [rest]).decode('utf-8', 'replace')
+        if proc.wait() != 0:
+            raise RuntimeError((err or text).strip()[-400:] or 'rsync a échoué')
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+    files, size = FILES.search(text), BYTES.search(text)
     return {'files': _number(files.group(1)) if files else 0,
-            'bytes': _number(size.group(1)) if size else 0}
+            'bytes': _number(size.group(1)) if size else 0, 'seen': seen}
 
 
 def run(src, dst, tell=None, stop=None, skip=None):

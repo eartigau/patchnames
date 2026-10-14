@@ -446,6 +446,17 @@ button:focus-visible,
   .progress div { animation: none; }
 }
 
+/* a bar whose end is not known: its light runs along it */
+.progress.unknown div {
+  width: 30% !important;
+  animation: flow 2.4s linear infinite, wander 1.8s ease-in-out infinite alternate;
+}
+
+@keyframes wander {
+  from { margin-left: 0; }
+  to { margin-left: 70%; }
+}
+
 /* what each sequence under way is at, and what went wrong: a note set apart */
 .batch .lines {
   flex: 1 1 100%;

@@ -12,8 +12,10 @@ times()  puts right the hour of the photos whose camera clock was off. The
          whose file is no longer as the index read it.
 names()  gives each file its canonical name, YYMMDD_HHMMSS[_WHO]_NUM.ext, as
          `patchnames` does (core.get_exif).
-send()   moves each file to the archive in use, under 20YY_MM/oiseaux or
-         /autres as `patchnames` does, once it has its canonical name.
+send()   moves each file to a copy of the archive (the one chosen, or the
+         one in use), under 20YY_MM/oiseaux or /autres as `patchnames` does,
+         once it has its canonical name. The other copies are told they
+         do not have it yet: the copy between drives brings it to them.
 
 The index follows each file (photoindex.rename): what is known of a photo
 stays with it. Unlike `patchnames`, nothing is deleted nor written over: a
@@ -101,6 +103,9 @@ def plan(cfg=None):
             'odd': sum(1 for path in paths if not _canonical(os.path.basename(path))),
             'retime': sum(offsets.values()),
             'offsets': [[_hours(offset), count] for offset, count in sorted(offsets.items())],
+            # the copies of the archive the files may be sent to, and the one in use
+            'archives': [{'root': place, 'name': sync.name_of(place), 'mounted': os.path.isdir(place),
+                          'used': place == root} for place in _config_module.archive_roots(cfg)],
             'archive': {'name': sync.name_of(root), 'mounted': os.path.isdir(root)}}
 
 
@@ -287,19 +292,27 @@ def _send(db, root, path, out):
     _log(f'envoi  {path} -> {target}')
     if known is not None:
         photoindex.rename(db, {name: target})
+        # this copy of the archive has the photo, the others not yet
+        for other in _config_module.archive_roots():
+            db.execute('DELETE FROM absent WHERE copy = ? AND name = ?' if other == root
+                       else 'INSERT OR IGNORE INTO absent VALUES (?, ?)', (other, name))
+        db.commit()
     return True
 
 
-def send(tell=None, stop=None, hold=_free):
-    """Move every file that waits to the archive in use, each under its
-    canonical name in its folder (see the module). Raises RuntimeError when
-    the archive is not there. Returns {'done', 'total', 'sent', 'bytes',
-    'all', 'renamed', 'left', 'problems', 'to'}: 'bytes' out of 'all' are
-    through, 'sent' files went, to the archive named 'to'."""
+def send(tell=None, stop=None, hold=_free, root=None):
+    """Move every file that waits to a copy of the archive (root; the one in
+    use without it), each under its canonical name in its folder (see the
+    module). Raises RuntimeError when that copy is not there. Returns {'done',
+    'total', 'sent', 'bytes', 'all', 'renamed', 'left', 'problems', 'to'}:
+    'bytes' out of 'all' are through, 'sent' files went, to the archive
+    named 'to'."""
     cfg = _config_module.load()
-    root = _config_module.archive_root(cfg)
+    root = root or _config_module.archive_root(cfg)
+    if root not in _config_module.archive_roots(cfg):
+        raise RuntimeError(f"{root} n'est pas une copie de l'archive")
     if not os.path.isdir(root):
-        raise RuntimeError("l'archive n'est pas montée")
+        raise RuntimeError(f"l'archive {sync.name_of(root)} n'est pas montée")
     paths = files(cfg)
     sizes = {path: os.path.getsize(path) for path in paths}
     out = {'done': 0, 'total': len(paths), 'sent': 0, 'bytes': 0, 'all': sum(sizes.values()),

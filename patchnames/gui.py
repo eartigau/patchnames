@@ -317,13 +317,15 @@ def _holding(seq):
             _release(seq)
 
 
-def _act_start(what):
+def _act_start(what, root=None):
     """start one of the three actions on the photos that wait: 'times',
-    'names' or 'send'; why not, when it cannot start"""
+    'names' or 'send' (to the copy of the archive `root`, the one in use
+    without it); why not, when it cannot start"""
     if what not in ('times', 'names', 'send'):
         return 'action inconnue'
-    if what == 'send' and not _archive()['mounted']:
-        return "L'archive n'est pas montée : rien ne peut y être envoyé."
+    root = (root or _archive()['mounted']) if what == 'send' else None
+    if what == 'send' and (root not in photoindex.roots() or not os.path.isdir(root)):
+        return "Cette copie de l'archive n'est pas montée : rien ne peut y être envoyé."
     db = _db()
     waiting = {row[0] for row in db.execute("SELECT DISTINCT seq FROM photos WHERE path LIKE '/%'")}
     db.close()
@@ -341,18 +343,19 @@ def _act_start(what):
         _act.clear()
         _act.update(state='running', what=what, started=time.time(), done=0, total=0)
     _act_stop.clear()
-    threading.Thread(target=_act_job, args=(what,), daemon=True).start()
+    threading.Thread(target=_act_job, args=(what, root), daemon=True).start()
     return None
 
 
-def _act_job(what):
+def _act_job(what, root=None):
     """one of the three actions on the photos that wait, with its counts as
     it goes"""
     from . import inbox
     from .doc import index_inbox
     try:
         index_inbox()       # (the index has every photo that waits, to follow it)
-        found = getattr(inbox, what)(tell=_act.update, stop=_act_stop, hold=_holding)
+        where = {'root': root} if what == 'send' else {}
+        found = getattr(inbox, what)(tell=_act.update, stop=_act_stop, hold=_holding, **where)
         _act.update(found, state='done', stopped=_act_stop.is_set(), ended=time.time())
     except Exception as exc:
         _act.update(state='error', error=str(exc), ended=time.time())
@@ -435,6 +438,16 @@ def _sync_start(src, dst, go):
     return True
 
 
+def _files_of(root):
+    """how many files a copy of the archive holds, as last counted: by a
+    comparison with another copy, else by a listing of it; 0 when nobody
+    counted yet"""
+    try:
+        return int(photoindex.meta('files:' + root) or 0) or int(_looked(root).get('files') or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _sync_job(src, dst, go, known):
     """compare two copies of the archive (what `src` has that is newer than
     in `dst`, or missing there; known: that was just done), and copy it if
@@ -447,7 +460,18 @@ def _sync_job(src, dst, go, known):
         if skip and not known:
             _sync.update(aside=sum(dupes.settle(root) for root in (src, dst) if os.path.isdir(root)))
         if not known:
-            _sync.update(sync.plan(src, dst, skip))
+            _sync_stop.clear()
+            _sync.update(seen=0, total=_files_of(src))
+            found = sync.plan(src, dst, skip, tell=lambda seen: _sync.update(seen=seen),
+                              stop=_sync_stop)
+            if found is None:
+                _sync.update(state='idle', ended=time.time())       # (stopped)
+                return
+            _sync.update(found)
+            # (how many files that copy has, for the bar of the next comparison)
+            db = photoindex.connect()
+            photoindex.set_meta(db, 'files:' + src, found['seen'])
+            db.close()
         if not go or not _sync['files']:
             if not _sync['files']:
                 # nothing to copy: the two copies are alike, the index is left on both
@@ -1078,7 +1102,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, _backup_status())
                 return
             if self.path == '/api/inbox/act':
-                refused = _act_start(str(body.get('what')))
+                refused = _act_start(str(body.get('what')), body.get('root') and str(body['root']))
                 self._send(200, dict(_inbox_status(), refused=refused or ''))
                 return
             if self.path == '/api/inbox/stop':
