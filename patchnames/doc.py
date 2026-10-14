@@ -1888,7 +1888,7 @@ def rematch():
     seqs, unknown = [], 0
     for row in rows:
         parsed = NAME.match(row['name'])
-        if row['camera'] is None and not anchored(None, [row['name']]):
+        if row['camera'] is None and os.path.splitext(row['name'])[1].lower() in ('.jpg', '.jpeg'):
             unknown += 1        # (a JPEG whose camera is not known yet: left as it is)
             continue
         seqs.append({'names': [row['name']], 'bird': bool(row['bird']), 'zone': row['zone'],
