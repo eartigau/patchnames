@@ -2783,6 +2783,11 @@ def main():
                           help='L\'indice du mot de passe, montré quand il est demandé : gardé '
                                'dans votre config et dans les notes du dépôt privé ("" le retire).')
 
+    sub.add_parser(
+        'orphelins', help='Comparer fichier par fichier les deux copies de l\'archive : les fichiers '
+                          'que l\'une a et l\'autre pas, et les photos de la base qu\'aucune n\'a. '
+                          'Rien n\'est déplacé ni copié.')
+
     p_orient = sub.add_parser(
         'redresser', help='Faire trouver par Claude les photos couchées ou à l\'envers, et les '
                           'tourner (seule l\'étiquette Orientation du fichier est récrite).')
@@ -2799,6 +2804,36 @@ def main():
                        help="Faire l'application dans ~/Applications sans toucher au Dock.")
 
     args = parser.parse_args()
+    if args.cmd == 'orphelins':
+        from . import sync
+        there = [copy['root'] for copy in sync.copies() if copy['mounted']]
+        if len(there) < 2:
+            print('Branchez les deux copies de l\'archive pour les comparer.')
+            return
+        print(f"Comparaison de {sync.name_of(there[0])} et de {sync.name_of(there[1])} fichier par "
+              'fichier...', flush=True)
+        try:
+            out = sync.orphans(there[0], there[1])
+        except RuntimeError as exc:
+            print(f'La comparaison a échoué : {exc}')
+            return
+        db = photoindex.connect()
+        photoindex.set_meta(db, 'orphans', json.dumps(out, ensure_ascii=False))
+        db.close()
+        for name in out['copies']:
+            print(f"  {name} : {out['files'][name]} fichiers")
+            for kind in ('seul', 'renomme', 'deplace', 'doublon'):
+                count = out['counts'].get(kind, {}).get(name, 0)
+                if count:
+                    print(f'    {count} {kind} : {sync.ORPHAN_KINDS[kind]}')
+            folders = [f'{folder} ({count})' for folder, count in out['folders'][name][:8]]
+            if folders:
+                print(f"      dans : {', '.join(folders)}")
+        lost = out['counts'].get('perdue', {}).get('base', 0)
+        print(f'  {lost} photos de la base ne sont sur aucune des deux copies.' if lost
+              else '  Aucune photo de la base ne manque aux deux copies.')
+        print(f"La liste, fichier par fichier : {out['list']}")
+        return
     if args.cmd == 'redresser':
         said = lambda out: print(f"  {out['looked']} regardées, {out['turned']} tournées, "
                                  f"{out['left']} à regarder", flush=True)

@@ -741,6 +741,15 @@ async function showArchive(data) {
   } else if (job.state === "error") {
     text = `La copie de ${pair} a échoué : ${job.error}`;
   }
+  const looking = showOrphans(data);
+  if (data.orphans && !busy && job.state !== "planned") {
+    buttons.push(el("button", {
+      class: "pill", type: "button", disabled: (looking || data.copies.filter((copy) => copy.mounted).length < 2) && "disabled",
+      text: looking ? "Comparaison en cours…" : "Chercher les orphelins",
+      title: "Comparer les deux copies fichier par fichier : les fichiers que l'une a et l'autre pas (pas encore copiés, "
+        + "ou l'ancien nom d'une photo renommée ou déplacée sur l'autre), et les photos de la base qu'aucune n'a. Rien n'est déplacé ni copié.",
+      onclick: () => archiveDo("/api/orphans", {}) }));
+  }
   $("archiveActions").replaceChildren(
     el("span", { class: "label", text: busy || job.state === "planned" ? "" : "Copier le plus récent" }), ...buttons);
   // (the index lives on this machine only: a copy of it is left on the drives)
@@ -751,7 +760,65 @@ async function showArchive(data) {
   if (job.aside && text) text += ` ${plural(job.aside, "doublon rangé", "doublons rangés")} de côté sur l'autre copie, dans son dossier doublons.`;
   $("syncBar").hidden = !bar;
   $("syncStatus").textContent = text;
-  if (busy) archive.timer = setTimeout(showArchive, 2000);
+  if (busy || looking) archive.timer = setTimeout(showArchive, 2000);
+}
+
+// what the last comparison of the two copies found, in a sentence or two
+function orphansText(last) {
+  const counts = last.counts || {}, kinds = ["seul", "renomme", "deplace", "doublon"];
+  const of = (kind, copy) => (counts[kind] || {})[copy] || 0;
+  const parts = last.copies.map((copy) => {
+    const only = kinds.reduce((sum, kind) => sum + of(kind, copy), 0);
+    if (!only) return "";
+    const other = last.copies.find((name) => name !== copy);
+    const folders = (last.folders[copy] || []);
+    const where = folders.slice(0, 4).map(([folder, count]) => `${folder} : ${number(count)}`).join(", ")
+      + (folders.length > 4 ? ", …" : "");
+    const details = [
+      ["renomme", `sous un autre nom sur ${other} (l'un des deux noms est sans doute un ancien)`],
+      ["deplace", `dans un autre dossier sur ${other}`],
+      ["doublon", `déjà mis de côté comme doublons sur ${other}`],
+      ["seul", `sans rien de semblable sur ${other}` + (where ? ` (${where})` : "")],
+    ].filter(([kind]) => of(kind, copy));
+    // (a single kind is said without counting it twice)
+    return `Seulement sur ${copy} : ${plural(only, "fichier", "fichiers")}` + (details.length === 1
+      ? ` ${details[0][1]}.` : `, dont ${details.map(([kind, said]) => `${number(of(kind, copy))} ${said}`).join(" ; ")}.`);
+  }).filter(Boolean);
+  const lost = (counts.perdue || {}).base || 0;
+  return `Comparaison de ${last.copies.join(" et de ")} (${last.when}) : `
+    + (parts.length ? parts.join(" ") : "les deux copies ont les mêmes fichiers.")
+    + (lost ? ` ${plural(lost, "photo de la base n'est", "photos de la base ne sont")} sur aucune des deux copies.`
+       : " Aucune photo de la base ne manque aux deux.");
+}
+
+// the look for orphans between the two copies: how far it is, or what it
+// found last; true while it runs
+function showOrphans(data) {
+  const job = data.orphans;
+  if (!job) return false;                       // a server from before this
+  const running = job.state === "running", last = job.last || {};
+  let text = "";
+  if (running) {
+    const seen = job.seen || 0, share = job.total ? Math.min(0.99, seen / job.total) : 0;
+    $("orphansFill").style.width = (100 * share).toFixed(1) + "%";
+    $("orphansBar").classList.toggle("unknown", !job.total);
+    text = "Comparaison des deux copies fichier par fichier : "
+      + (job.total ? `${Math.floor(100 * share)} % · ${number(seen)} / ${number(job.total)} fichiers` : `${number(seen)} fichiers`)
+      + ` [${clock(job.seconds || 0)}]`;
+  } else if (job.state === "error") {
+    text = "La comparaison des deux copies a échoué : " + job.error;
+  } else if (last.copies) {
+    text = orphansText(last);
+  }
+  $("orphansBar").hidden = !running;
+  const status = $("orphansStatus");
+  status.replaceChildren(text);
+  if (!running && last.copies && job.state !== "error") {
+    status.append(" ", el("a", { href: "#", text: "Voir la liste",
+                                 title: "La liste de chaque fichier, dans le Finder (orphelins.tsv, dans le dossier de la base)",
+                                 onclick: (event) => { event.preventDefault(); post("/api/orphans", { show: true }); } }));
+  }
+  return running;
 }
 
 function totals(sums) {

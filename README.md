@@ -722,6 +722,21 @@ l'appel à Claude le demandent.
   (un fichier sans numéro d'appareil change de nom quand ses étiquettes
   sont écrites) reste sous son ancien nom sur l'autre.
 
+  « Chercher les orphelins », ou `patchdoc orphelins`, compare les deux
+  copies fichier par fichier (moins d'une minute à 1 min 30 pour deux fois
+  250 000 fichiers ; le serveur donne sa liste d'un coup) et dit ce que
+  rsync ne règle pas : les fichiers que l'une a et l'autre pas, et les
+  photos de la base qu'aucune des deux n'a. Pour chaque fichier d'un seul
+  côté, il dit si l'autre copie a la même photo sous un autre nom (même
+  numéro d'appareil à moins de deux jours, ou même empreinte dans le nom,
+  et même taille à 0,1 % près : l'un des deux noms est sans doute un
+  ancien, qu'une copie vers l'autre ramènerait), sous le même nom dans un
+  autre dossier, mise de côté comme doublon, ou rien de semblable (pas
+  encore copiée). La liste de chaque fichier va dans `orphelins.tsv`, dans
+  le dossier de la base (« Voir la liste »). Rien n'est déplacé ni copié. Une
+  même image sous deux noms sur les deux copies est l'affaire de
+  `patchdoc doublons`.
+
   La base de recherche, elle, n'existe que sur votre machine. À la fin de
   chaque copie d'un disque à l'autre (et quand la comparaison ne trouve
   rien à copier), une copie en est laissée sur les deux disques :

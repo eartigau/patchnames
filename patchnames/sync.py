@@ -16,6 +16,12 @@ with sshfs is found without it while it is mounted.
 
 plan() says what a copy would bring (a dry run), run() does it and tells how
 far it is: the bytes and the files copied so far, and the pace.
+
+orphans() compares two copies file by file, and with the index, for what
+rsync does not settle: a file that one copy has and the other does not
+(not yet copied, or the old name of a photo renamed or moved on the other
+copy, which a copy the other way would bring back), and a photo of the
+index that neither copy has. It only says; nothing is moved or copied.
 """
 
 import os
@@ -36,6 +42,20 @@ BYTES = re.compile(r'Total transferred file size: ([\d,.\s]+)')
 #: a line of rsync --info=progress2: bytes so far, percent, pace, time, and
 #:  the files copied so far
 PROGRESS = re.compile(r'^\s*([\d,.]+)\s+\d+%\s+(\S+/s)\s+\d+:\d\d:\d\d(?:\s+\(xfr#(\d+),)?')
+#: the list of the orphans found last (orphans()), in the folder of the index
+ORPHANS = 'orphelins.tsv'
+#: what an orphan is, as that list says it
+ORPHAN_KINDS = {
+    'seul': "seulement sur cette copie, rien de semblable sur l'autre : une copie vers l'autre "
+            "l'y apportera",
+    'deplace': "sur l'autre copie aussi, sous le même nom, mais dans un autre dossier",
+    'renomme': "l'autre copie a la même photo sous un autre nom (même numéro à moins de deux "
+               "jours, ou même empreinte, même taille à 0,1 % près) : l'un des deux noms est "
+               "probablement un ancien, qu'une copie vers l'autre ramènerait",
+    'doublon': "mis de côté comme doublon sur l'autre copie (patchdoc doublons), encore en "
+               "place ici : la prochaine copie le range aussi",
+    'perdue': "dans la base, mais sur aucune des deux copies, sous aucun dossier",
+}
 
 
 def name_of(root):
@@ -303,3 +323,164 @@ def run(src, dst, tell=None, stop=None, skip=None):
     finally:
         if proc.poll() is None:
             proc.kill()
+
+
+def orphans(first, second, tell=None):
+    """Compare two copies of the archive (two roots) file by file, and with
+    the index (see the module). Each file that one copy has and the other
+    does not, at the same place, is said to be:
+    - 'doublon': put aside as a duplicate (patchdoc doublons) on the other;
+    - 'deplace': on the other too, under the same name, in another folder;
+    - 'renomme': the other has a file of the same camera number (or hash),
+      the same maker's initials and kind, nearly the same size (dupes.NEAR),
+      under another name, and for a camera number within dupes.WINDOW of
+      its time: most likely the same photo, one of the two names an old one
+      (the one the index knows is said, the closest in time is taken);
+    - 'seul': nothing like it on the other.
+    A photo of the index ('perdue') is one whose name is on neither copy,
+    in any folder. The list goes to ORPHANS in the folder of the index,
+    one line a file: kind, copy, path, its twin on the other copy, and the
+    names of the two the index knows. tell(seen) as the copies are listed:
+    the files listed so far. Returns {'copies': [name, name], 'files':
+    {name: count}, 'counts': {kind: {name: count}}, 'folders': {name:
+    [(folder, count)]} (the folders the 'seul' files of each copy are in, the
+    fullest first), 'list', 'when'}; raises RuntimeError."""
+    import collections
+    import threading
+    from datetime import datetime
+    from . import dupes, photoindex
+    roots = [first, second]
+    for root in roots:
+        if not os.path.isdir(root):
+            raise RuntimeError(f"{name_of(root)} n'est pas branché ({root})")
+    if name_of(first) == name_of(second):
+        raise RuntimeError('deux copies du même nom')
+    seen, files, failed = {first: 0, second: 0}, {}, []
+
+    def listed(root):
+        def counted(count):
+            seen[root] = count
+            if tell:
+                tell(sum(seen.values()))
+        try:
+            found = dupes.listing(root, sizes=False, tell=counted)
+            # (the copies of the index left on the drives are not photos)
+            files[root] = {path: what for path, what in found.items()
+                           if not path.startswith(BACKUP + '/')}
+            seen[root] = len(files[root])
+        except Exception as exc:
+            failed.append(f'{name_of(root)} : {exc}')
+
+    # (both at once: one is a drive of this machine, the other often a server)
+    workers = [threading.Thread(target=listed, args=(root,)) for root in roots]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join()
+    if failed:
+        raise RuntimeError(' ; '.join(failed))
+    for root in roots:
+        if not files[root]:
+            raise RuntimeError(f"{name_of(root)} n'a donné aucun fichier (la copie est-elle branchée ?)")
+    if tell:
+        tell(sum(seen.values()))
+
+    sizes = {}
+
+    def size(root, path):
+        """the size of a file of a copy: from its listing (a server gives
+        them), else asked of the drive, once"""
+        what = files[root].get(path)
+        if what:
+            return what[0]
+        if (root, path) not in sizes:
+            try:
+                sizes[root, path] = os.path.getsize(os.path.join(root, path))
+            except OSError:
+                sizes[root, path] = None
+        return sizes[root, path]
+
+    def key(path):
+        found = dupes.NAME.match(os.path.basename(path))
+        return (found.group(3) or '', found.group(4), found.group(5).lower()) if found else None
+
+    db = photoindex.connect()
+    try:
+        known = photoindex.known(db)
+    finally:
+        db.close()
+    aside = set(dupes.excluded())
+    by_name = {root: collections.defaultdict(list) for root in roots}
+    by_key = {root: collections.defaultdict(list) for root in roots}
+    for root in roots:
+        for path in files[root]:
+            by_name[root][os.path.basename(path)].append(path)
+            found = key(path)
+            if found:
+                by_key[root][found].append(path)
+
+    def twin(path, root, other):
+        """the file of the other copy most likely the same photo under
+        another name, None without one"""
+        mine, found = size(root, path), key(path)
+        when = dupes._named(path)
+        if not found or not mine or not when:
+            return None
+        near = []
+        for there in by_key[other].get(found, ()):
+            then = dupes._named(there)
+            if os.path.basename(there) == os.path.basename(path) or not then:
+                continue
+            gap = abs((then[0] - when[0]).total_seconds())
+            # a camera number comes back every 10 000 photos, and the raw files
+            #   of a camera are nearly all of a size: such a twin is believed
+            #   within dupes.WINDOW only; a hash of the file in its name is
+            #   believed at any time
+            if found[1].isdigit() and gap > dupes.WINDOW:
+                continue
+            theirs = size(other, there)
+            if theirs and abs(theirs - mine) <= dupes.NEAR * max(theirs, mine):
+                near.append((gap, there))
+        return min(near)[1] if near else None
+
+    def told(*paths):
+        names = [os.path.basename(path) for path in paths if path]
+        return ' '.join(name for name in names if name in known)
+
+    rows, counts = [], collections.defaultdict(lambda: collections.Counter())
+    folders = {root: collections.Counter() for root in roots}
+    for root, other in ((first, second), (second, first)):
+        for path in sorted(set(files[root]) - set(files[other])):
+            name, there = os.path.basename(path), None
+            if path in aside:
+                kind = 'doublon'
+            elif by_name[other].get(name):
+                kind, there = 'deplace', by_name[other][name][0]
+            else:
+                there = twin(path, root, other)
+                kind = 'renomme' if there else 'seul'
+            if kind == 'seul':
+                folders[root][path.split('/', 1)[0] if '/' in path else '.'] += 1
+            counts[kind][name_of(root)] += 1
+            rows.append((kind, name_of(root), path, there or '', told(path, there)))
+    everywhere = set(by_name[first]) | set(by_name[second])
+    for name, (path, _) in sorted(known.items()):
+        # (a photo of the archive: its path in the index is relative to the root)
+        if path and not os.path.isabs(path) and name not in everywhere:
+            counts['perdue']['base'] += 1
+            rows.append(('perdue', 'base', path, '', name))
+    report = os.path.join(photoindex.index_dir(), ORPHANS)
+    with open(report + '.tmp', 'w') as handle:
+        handle.write('# ' + datetime.now().isoformat(' ', 'minutes') + ' : '
+                     + ' et '.join(name_of(root) for root in roots) + '\n')
+        for kind, said in ORPHAN_KINDS.items():
+            handle.write(f'# {kind} : {said}\n')
+        handle.write('genre\tcopie\tchemin\tjumeau\tnoms connus de la base\n')
+        for row in rows:
+            handle.write('\t'.join(row) + '\n')
+    os.replace(report + '.tmp', report)
+    return {'copies': [name_of(root) for root in roots],
+            'files': {name_of(root): len(files[root]) for root in roots},
+            'counts': {kind: dict(found) for kind, found in counts.items()},
+            'folders': {name_of(root): folders[root].most_common() for root in roots},
+            'list': report, 'when': datetime.now().isoformat(' ', 'minutes')}

@@ -27,6 +27,9 @@ The page (gui/index.html, app.js) asks for:
     /api/archive             the copies of the archive, and the copy from one
                              to another
     /api/archive/look        (POST) use a copy, and list what it holds
+    /api/orphans             (POST) compare two copies file by file for the
+                             files only one has (sync.orphans), or show the
+                             list found last in the Finder
     /api/inbox               the photos that wait to be sent to the archive;
                              (POST) look at their folders again
     /api/inbox/act           (POST) put their hours right, name them, or send
@@ -152,6 +155,10 @@ _orient, _orient_stop = {'state': 'idle'}, threading.Event()
 #: the backup of the index on GitHub (backup.py): 'idle', 'running' (with the
 #:  stage it is at), 'done' or 'error'
 _backup = {'state': 'idle'}
+#: the look for orphans between two copies of the archive (sync.orphans):
+#:  'idle', 'running' (with the files listed so far), 'done' or 'error'; what
+#:  was found last is in the index (meta 'orphans')
+_orphans = {'state': 'idle'}
 #: the listing of what each copy of the archive holds (doc.index_copy), {root:
 #:  {'state': 'reading', 'done' or 'error', and what was found}}
 _looks = {}
@@ -382,7 +389,51 @@ def _copies():
         state['seconds'] = round((state.get('ended') or time.time()) - state['started'])
     return {'copies': [dict(copy, server=bool(copy['remote']), look=_looked(copy['root']))
                        for copy in sync.copies()],
-            'sync': state}
+            'sync': state, 'orphans': _orphans_status()}
+
+
+def _orphans_status():
+    """how the look for orphans goes, and what it found last"""
+    state = dict(_orphans)
+    if state.get('started'):
+        state['seconds'] = round(time.time() - state['started'])
+    try:
+        state['last'] = json.loads(photoindex.meta('orphans') or '{}')
+    except ValueError:
+        state['last'] = {}
+    return state
+
+
+def _orphans_start():
+    """compare the first two copies of the archive that are there, in the
+    background; an error to say when that cannot be done"""
+    there = [copy['root'] for copy in sync.copies() if copy['mounted']]
+    with _lock:
+        if _orphans.get('state') == 'running':
+            return 'La comparaison est déjà en cours.'
+        if _sync.get('state') in ('planning', 'running', 'backup'):
+            return "Une copie est en cours : comparez quand elle sera finie."
+        if len(there) < 2:
+            return 'Branchez les deux copies pour les comparer.'
+        _orphans.clear()
+        _orphans.update(state='running', seen=0, started=time.time(),
+                        total=sum(_files_of(root) for root in there[:2]))
+    threading.Thread(target=_orphans_job, args=tuple(there[:2]), daemon=True).start()
+    return ''
+
+
+def _orphans_job(first, second):
+    try:
+        found = sync.orphans(first, second, tell=lambda seen: _orphans.update(seen=seen))
+        db = photoindex.connect()
+        photoindex.set_meta(db, 'orphans', json.dumps(found, ensure_ascii=False))
+        for root in (first, second):
+            # (how many files each copy has, for the bars that come next)
+            photoindex.set_meta(db, 'files:' + root, found['files'][sync.name_of(root)])
+        db.close()
+        _orphans.update(state='done')
+    except Exception as exc:
+        _orphans.update(state='error', error=str(exc))
 
 
 def _orient_status():
@@ -1111,11 +1162,23 @@ class Handler(BaseHTTPRequestHandler):
                 '/api/batch/stop', '/api/face', '/api/pano', '/api/rotate', '/api/archive/use',
                 '/api/archive/look', '/api/sync',
                 '/api/sync/stop', '/api/species', '/api/inbox', '/api/inbox/act',
-                '/api/inbox/stop', '/api/backup', '/api/quit', '/api/attach', '/api/orient'):
+                '/api/inbox/stop', '/api/backup', '/api/quit', '/api/attach', '/api/orient',
+                '/api/orphans'):
             self._send(403, {'error': 'refusé'})
             return
         try:
             body = json.loads(self.rfile.read(int(self.headers.get('Content-Length') or 0)))
+            if self.path == '/api/orphans':
+                # look for orphans between the two copies, or show the list found last
+                said = ''
+                if body.get('show'):
+                    listed = os.path.join(photoindex.index_dir(), sync.ORPHANS)
+                    if os.path.isfile(listed) and sys.platform == 'darwin':
+                        subprocess.run(['open', '-R', listed], capture_output=True)
+                else:
+                    said = _orphans_start()
+                self._send(200, dict(_copies(), error=said))
+                return
             if self.path == '/api/batch':
                 self._send(200, _batch_archive() if body.get('all')
                            else _batch_add(list(body.get('names') or [])))
