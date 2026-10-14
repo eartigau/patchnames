@@ -357,16 +357,18 @@ OWNER = re.compile(r'[A-Z]{2}')
 NEAR_KM = 5.0
 
 
-def anchored(camera, names):
+def anchored(camera, names, cameras=None):
     """whether photos are tied to the photographer's eBird checklists, for
-    their time and their place: those of the camera he goes birding with,
-    which makes NEF files (a NEF, or a JPEG or a DNG made from one, which
-    keeps the name of the camera). Not those of a phone, which members of
-    the family take too, nor of anything else. A photo whose camera is not
-    known is one of them if it is a NEF or a DNG."""
+    their time and their place: those of the cameras he goes birding with
+    (config 'ebird_cameras', the name a file gives of its camera: a NEF, or
+    a JPEG or a DNG made from one, which keeps it). Not those of a phone,
+    which members of the family take too, nor of anything else. A photo
+    whose camera is not known is one of them if it is a NEF or a DNG.
+    cameras: that expression, compiled (read from the config without it)."""
     camera = '' if not camera or OWNER.fullmatch(camera) else camera
     if camera:
-        return 'NIKON' in camera.upper()
+        cameras = cameras or re.compile(_cfg()['ebird_cameras'], re.I)
+        return bool(cameras.search(camera))
     return any(os.path.splitext(name)[1].lower() in ('.nef', '.dng') for name in names)
 
 
@@ -386,8 +388,9 @@ def locate(seqs, data, rows=None, clock=None, before=None):
     there are no rows (the index matched again)."""
     rows = rows or {}
     moments, zoned = {}, set()
+    cameras = re.compile(_cfg()['ebird_cameras'], re.I)
     for seq in seqs:
-        seq['anchored'] = anchored(seq['camera'], seq['names'])
+        seq['anchored'] = anchored(seq['camera'], seq['names'], cameras)
         if seq['bird'] and seq['when'] and seq['anchored']:
             moments.setdefault(seq['camera'], []).append((seq['when'], seq.get('zone')))
             if seq.get('zone') is not None:

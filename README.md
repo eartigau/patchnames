@@ -352,10 +352,13 @@ de la liste, photos d'oiseaux sans liste).
 ### Seules les photos du Nikon suivent les listes eBird
 
 Les listes eBird ne disent l'heure et le lieu que des photos de l'appareil
-avec lequel elles sont tenues : celles du Nikon, c'est-à-dire un NEF, ou un
-JPEG ou un DNG tiré d'un NEF (il garde le nom de l'appareil). Seules
-celles-là sont rattachées à une liste, prennent son lieu, et voient leur
-horloge corrigée d'après elle. Une photo de cellulaire, que prend aussi la
+avec lequel elles sont tenues : le D100, le D90, le Coolpix et les deux
+Z 50 (Z 50 et Z50_2), d'après le nom d'appareil que donne le fichier, avec
+ou sans « NIKON » devant (config `ebird_cameras`, une expression régulière).
+Un JPEG ou un DNG tiré d'un NEF garde ce nom. Seules ces photos-là sont
+rattachées à une liste, prennent son lieu, et voient leur horloge corrigée
+d'après elle ; une photo dont l'appareil n'est pas connu l'est si c'est un
+NEF ou un DNG. Une photo de cellulaire, que prend aussi la
 famille, ou d'un fichier qui ne nomme aucun appareil (une image reçue par
 une messagerie) garde son heure, n'a pas de liste, et n'a de lieu que s'il
 vient de sa propre position ; Claude l'identifie sans a priori. Une

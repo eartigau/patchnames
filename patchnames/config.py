@@ -62,6 +62,12 @@ DEFAULTS = {
                                 #   eye of each frame); None: the same as the first look
     'people': [],               # the names the search page offers first for a face (your own
                                 #   config file is the place for them)
+    # the cameras the eBird checklists are kept with, as a regular expression on
+    #   the name a file gives of its camera (with the maker's name or without it,
+    #   as some software leaves it): only their photos are tied to a checklist,
+    #   for their time and their place (doc.anchored). The D100, the D90, the
+    #   Coolpix (E4500...) and the two Z 50
+    'ebird_cameras': r'\bD100\b|\bD90\b|COOLPIX|^E\d{3,4}$|\bZ ?50(_2)?$',
     # the backup of the index on GitHub (backup.py): the private repository it
     #   goes to, 'account/name' (None: patchdoc-sauvegarde of the account gh is
     #   logged in to), and how many backups are kept there
