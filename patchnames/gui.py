@@ -419,7 +419,7 @@ def _backup_status():
     """how the backup of the index goes, whether it has its password, and
     what the last one was"""
     from . import backup
-    return dict(_backup, password=backup.has_password(), last=backup.last())
+    return dict(_backup, password=backup.has_password(), last=backup.last(), hint=backup.hint())
 
 
 def _backup_job():

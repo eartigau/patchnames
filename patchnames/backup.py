@@ -16,6 +16,13 @@ refused all the same. The password is in the macOS keychain (`patchdoc
 sauvegarde --mot-de-passe` asks for it; it is typed into the `security`
 command itself), never in a file. Lose it and the backups cannot be read.
 
+A hint is shown wherever the password is asked for (config 'backup_hint',
+`patchdoc sauvegarde --indice`): in the user's own config, never in this
+public code, and in the notes of the private release, so that a machine that
+has neither the keychain nor the config (the one that replaces a lost one)
+finds it there. `--restaurer` asks for the password, with the hint, when the
+keychain has none or has another one.
+
 The encryption is that of the openssl command (AES-256-CBC, the key drawn
 from the password by PBKDF2, 600 000 rounds of SHA-256), so that a backup is
 read back with nothing but openssl and gunzip, on any machine:
@@ -59,10 +66,39 @@ Chaque fichier est la base `photos.sqlite`, sans les vignettes, compressée avec
     openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -md sha256 -in photos-AAAAMMJJ-HHMMSS.sqlite.gz.enc | gunzip > photos.sqlite
 
 ou `patchdoc sauvegarde --restaurer FICHIER`."""
+#: the line of the notes that holds the hint of the password
+HINT_LINE = 'Indice du mot de passe : '
 
 
 def _cfg():
     return _config_module.load()
+
+
+def _notes(said):
+    """the notes of the release, with the hint of the password if there is one"""
+    return NOTES + (f'\n\n{HINT_LINE}{said}' if said else '')
+
+
+def hint(cfg=None, online=False):
+    """the hint of the password: config 'backup_hint', else (online) the one
+    in the notes of the release; None without one"""
+    said = (cfg or _cfg()).get('backup_hint')
+    if said or not online:
+        return said or None
+    try:
+        body = _gh('release', 'view', TAG, '-R', repo(cfg), '--json', 'body', '-q', '.body',
+                   check=False, timeout=60).stdout
+    except RuntimeError:
+        return None
+    return next((line[len(HINT_LINE):].strip() for line in body.splitlines()
+                 if line.startswith(HINT_LINE)), None)
+
+
+def set_hint(said):
+    """keep the hint of the password in the user's config (and in the notes
+    of the release at the next backup)"""
+    _config_module.save({'backup_hint': said.strip() or None})
+    print(f'Indice gardé : {said.strip()}' if said.strip() else 'Indice retiré.')
 
 
 def has_password():
@@ -97,11 +133,19 @@ def set_password():
             return
     print('Le mot de passe des sauvegardes, demandé deux fois par le trousseau. Notez-le aussi '
           'ailleurs : sans lui, aucune sauvegarde ne peut être relue.')
+    said = hint()
+    if said:
+        print(f'Indice : {said}')
     subprocess.run(['security', 'delete-generic-password', '-s', SERVICE], capture_output=True)
     # -w last and without a value: `security` asks for the password itself
     done = subprocess.run(['security', 'add-generic-password', '-s', SERVICE, '-a', 'patchdoc',
                            '-l', 'patchnames (sauvegarde de la base)', '-w'])
     print('  gardé dans le trousseau.' if done.returncode == 0 else '  PAS gardé (voir ci-dessus).')
+    if done.returncode == 0 and not said:
+        said = input('Un indice pour vous le rappeler, montré quand il est demandé '
+                     '(Entrée : aucun) : ')
+        if said.strip():
+            set_hint(said)
 
 
 def _gh(*args, check=True, timeout=1800):
@@ -122,9 +166,9 @@ def repo(cfg=None):
     return name or _gh('api', 'user', '-q', '.login', timeout=60).stdout.strip() + '/patchdoc-sauvegarde'
 
 
-def _ready(name):
+def _ready(name, said=None):
     """make sure the repository is there and private, with the release the
-    backups are files of"""
+    backups are files of, whose notes give the hint of the password (said)"""
     seen = _gh('repo', 'view', name, '--json', 'isPrivate', '-q', '.isPrivate', check=False,
                timeout=60)
     if seen.returncode != 0:
@@ -133,14 +177,19 @@ def _ready(name):
     elif seen.stdout.strip() != 'true':
         raise RuntimeError(f"le dépôt {name} n'est pas privé : les sauvegardes ne vont que dans "
                            'un dépôt privé')
-    if _gh('release', 'view', TAG, '-R', name, check=False, timeout=60).returncode != 0:
+    seen = _gh('release', 'view', TAG, '-R', name, '--json', 'body', '-q', '.body', check=False,
+               timeout=60)
+    if seen.returncode != 0:
         for attempt in range(4):
             # (a repository just made takes a moment to have its first commit)
             made = _gh('release', 'create', TAG, '-R', name, '--title',
-                       'Sauvegardes de la base de patchdoc', '--notes', NOTES, check=attempt == 3)
+                       'Sauvegardes de la base de patchdoc', '--notes', _notes(said),
+                       check=attempt == 3)
             if made.returncode == 0:
                 break
             time.sleep(3)
+    elif said and seen.stdout.strip() != _notes(said).strip():
+        _gh('release', 'edit', TAG, '-R', name, '--notes', _notes(said), timeout=60)
 
 
 def _crypt(source, target, secret, decrypt=False):
@@ -209,7 +258,7 @@ def run(tell=None):
         final = make(folder, secret, tell)
         tell('envoi')
         name = repo(cfg)
-        _ready(name)
+        _ready(name, hint(cfg))
         _gh('release', 'upload', TAG, final, '-R', name, '--clobber')
         out = {'when': datetime.now().isoformat(' ', 'minutes'), 'name': os.path.basename(final),
                'bytes': os.path.getsize(final), 'repo': name}
@@ -235,20 +284,49 @@ def last():
         return {}
 
 
+def _ask(said, tries=3):
+    """the passwords typed in the terminal, with the hint (said) shown first;
+    nothing when there is no terminal to type them in"""
+    if not sys.stdin.isatty():
+        return
+    import getpass
+    print(f'Indice : {said}' if said else "(pas d'indice : `patchdoc sauvegarde --indice`)")
+    for _ in range(tries):
+        typed = getpass.getpass('Mot de passe des sauvegardes : ')
+        if typed:
+            yield typed
+
+
 def restore(path, target=None):
     """Read a backup back into a database file (photos.restauree.sqlite here,
     unless told otherwise): never over a file that is there, and never over
-    the index itself. Returns the path of the file made."""
-    secret = password()
-    if not secret:
-        raise RuntimeError('pas de mot de passe dans le trousseau (`patchdoc sauvegarde '
-                           '--mot-de-passe`)')
+    the index itself. The password of the keychain is tried first; without
+    it, or when it does not fit, the password is asked for, with its hint.
+    Returns the path of the file made."""
     target = os.path.abspath(target or 'photos.restauree.sqlite')
     if os.path.exists(target):
         raise RuntimeError(f'{target} existe déjà : rien n\'est écrasé')
     with tempfile.TemporaryDirectory() as folder:
         packed = os.path.join(folder, 'photos.sqlite.gz')
-        _crypt(path, packed, secret, decrypt=True)
+        kept = password()
+        if kept:
+            try:
+                _crypt(path, packed, kept, decrypt=True)
+            except RuntimeError:
+                kept = None
+                print("Le mot de passe du trousseau ne convient pas à cette sauvegarde.")
+        if not kept:
+            for typed in _ask(hint(online=True)):
+                try:
+                    _crypt(path, packed, typed, decrypt=True)
+                    break
+                except RuntimeError:
+                    print('  ne convient pas.')
+            else:
+                raise RuntimeError('le mot de passe ne convient pas, ou le fichier est abîmé'
+                                   if sys.stdin.isatty() else
+                                   "pas de mot de passe qui convienne dans le trousseau, et pas de "
+                                   "terminal pour le demander")
         try:
             with gzip.open(packed, 'rb') as handle, open(target, 'wb') as out:
                 shutil.copyfileobj(handle, out, 1 << 20)
@@ -259,10 +337,12 @@ def restore(path, target=None):
     return target
 
 
-def main(set_it=False, back=None):
-    """`patchdoc sauvegarde`: ask for the password, read a backup back, or
-    make one and send it"""
+def main(set_it=False, back=None, said=None):
+    """`patchdoc sauvegarde`: ask for the password, keep its hint (said), read
+    a backup back, or make one and send it"""
     try:
+        if said is not None:
+            set_hint(said)
         if set_it:
             set_password()
         elif back:
@@ -273,11 +353,11 @@ def main(set_it=False, back=None):
             print(f'Base relue dans {made} : {count[0]} photos, dont {count[1] or 0} décrites.\n'
                   f"Pour qu'elle devienne la base de recherche, arrêtez `patchdoc gui` et copiez-la "
                   f'vers {photoindex.db_path()}.')
-        else:
-            said = {'copie': 'Copie de la base...', 'compression': 'Compression...',
-                    'chiffrement': 'Chiffrement, et relecture pour vérifier...',
-                    'envoi': 'Envoi vers GitHub...'}
-            out = run(lambda stage: print(said[stage], flush=True))
+        elif said is None:
+            stages = {'copie': 'Copie de la base...', 'compression': 'Compression...',
+                      'chiffrement': 'Chiffrement, et relecture pour vérifier...',
+                      'envoi': 'Envoi vers GitHub...'}
+            out = run(lambda stage: print(stages[stage], flush=True))
             many = 's' if out['kept'] > 1 else ''
             print(f"Base sauvegardée : {out['name']} ({out['bytes'] / 1e6:.1f} Mo) dans le dépôt "
                   f"privé {out['repo']} ; {out['kept']} sauvegarde{many} gardée{many}.")

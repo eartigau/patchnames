@@ -438,6 +438,13 @@ connectée à votre compte (`gh auth login`).
   est tapé dans la commande `security` de macOS et gardé dans le trousseau,
   jamais dans un fichier. Notez-le ailleurs aussi : sans lui, aucune
   sauvegarde ne peut être relue.
+- **L'indice.** `patchdoc sauvegarde --indice "TEXTE"` garde un indice du
+  mot de passe, montré partout où il est demandé (et sur la page tant qu'il
+  manque). Il est gardé dans votre config (`~/.config/patchnames`), jamais
+  dans ce code public, et dans les notes du dépôt privé à chaque
+  sauvegarde : une machine neuve, sans le trousseau ni la config, le trouve
+  là. Il est donc lisible par qui lit le dépôt privé, à côté des
+  sauvegardes : il doit aider à retrouver le mot de passe, pas le donner.
 - **Ce qui part.** Le chiffrement se fait sur cette machine, avant l'envoi :
   GitHub ne reçoit que ce qui ne se lit pas sans le mot de passe, et un
   dépôt qui n'est pas privé est refusé quand même. Chaque sauvegarde est
@@ -455,7 +462,9 @@ connectée à votre compte (`gh auth login`).
   ```
 
   ou `patchdoc sauvegarde --restaurer FICHIER`, qui écrit
-  `photos.restauree.sqlite` sans jamais toucher à la base en usage.
+  `photos.restauree.sqlite` sans jamais toucher à la base en usage. Si le
+  trousseau n'a pas le mot de passe, ou en a un autre, elle le demande, avec
+  son indice.
 
 Regarder une copie de l'archive à laquelle il manque des photos ne retire
 rien à la base : les descriptions, les notes et les noms de toutes les

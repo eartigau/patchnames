@@ -2776,7 +2776,12 @@ def main():
                           help='Demander le mot de passe des sauvegardes et le garder dans le '
                                'trousseau de macOS (à faire une fois).')
     p_backup.add_argument('--restaurer', metavar='FICHIER', default=None,
-                          help='Relire une sauvegarde téléchargée, dans photos.restauree.sqlite.')
+                          help='Relire une sauvegarde téléchargée, dans photos.restauree.sqlite '
+                               '(le mot de passe est demandé, avec son indice, si le trousseau '
+                               'ne l\'a pas).')
+    p_backup.add_argument('--indice', metavar='TEXTE', default=None,
+                          help='L\'indice du mot de passe, montré quand il est demandé : gardé '
+                               'dans votre config et dans les notes du dépôt privé ("" le retire).')
 
     p_orient = sub.add_parser(
         'redresser', help='Faire trouver par Claude les photos couchées ou à l\'envers, et les '
@@ -2808,7 +2813,7 @@ def main():
         return
     if args.cmd == 'sauvegarde':
         from . import backup
-        backup.main(set_it=args.password, back=args.restaurer)
+        backup.main(set_it=args.password, back=args.restaurer, said=args.indice)
         return
     if args.cmd == 'doublons':
         from . import dupes

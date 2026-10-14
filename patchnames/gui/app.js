@@ -643,7 +643,8 @@ async function showBackup(data) {
     : "Aucune sauvegarde pour l'instant.";
   $("backupStatus").textContent = busy ? `Sauvegarde : ${stages[data.stage] || "début"}…`
     : data.state === "error" ? `La sauvegarde a échoué : ${data.error}. ${last}`
-    : !data.password ? "Donnez d'abord un mot de passe, une fois, dans un terminal : patchdoc sauvegarde --mot-de-passe. " + last
+    : !data.password ? "Donnez d'abord un mot de passe, une fois, dans un terminal : patchdoc sauvegarde --mot-de-passe"
+      + (data.hint ? ` (indice : ${data.hint}). ` : ". ") + last
     : last;
   if (busy) backup.timer = setTimeout(showBackup, 1500);
 }

@@ -77,6 +77,9 @@ DEFAULTS = {
     #   logged in to), and how many backups are kept there
     'backup_repo': None,
     'backup_keep': 5,
+    # the hint of the password, shown where it is asked for: set in your own
+    #   config (`patchdoc sauvegarde --indice`), never here
+    'backup_hint': None,
     'pano_size': 3000,          # long side of the frames of a panorama when stitched; 0: full size
     # the eBird data (ebird.py)
     'ebird_dir': str(Path.home() / '.config' / 'patchnames' / 'ebird'),
