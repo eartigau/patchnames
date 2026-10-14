@@ -39,6 +39,8 @@ LAUNCHER = '''#!/bin/sh
 # made by `patchdoc app`: start the search page of patchdoc if it is not
 # running, then open it in the browser
 export PATH=%(path)s
+# (what the page says reaches the log as it says it)
+export PYTHONUNBUFFERED=1
 %(config)sURL="http://127.0.0.1:%(port)s/"
 if ! curl -s -o /dev/null --max-time 2 "${URL}api/batch"; then
     mkdir -p "$HOME/Library/Logs"
