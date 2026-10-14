@@ -358,7 +358,11 @@ celles-là sont rattachées à une liste, prennent son lieu, et voient leur
 horloge corrigée d'après elle. Une photo de cellulaire, que prend aussi la
 famille, ou d'un fichier qui ne nomme aucun appareil (une image reçue par
 une messagerie) garde son heure, n'a pas de liste, et n'a de lieu que s'il
-vient de sa propre position ; Claude l'identifie sans a priori.
+vient de sa propre position ; Claude l'identifie sans a priori. Une
+exception : une photo d'un autre appareil qui porte sa propre position,
+prise pendant une liste (son heure telle quelle) à moins de 5 km de son
+lieu, y est rattachée quand même : c'est la sortie, vous ou la famille avec
+vous. Elle garde son heure et son lieu à elle.
 
 `patchdoc index --rematch` applique cette règle à la base : il lit d'abord,
 dans leurs fichiers, l'appareil des séquences JPEG que la base ne connaît

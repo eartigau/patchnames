@@ -49,6 +49,15 @@ class Spot:
         self.lat, self.lon, self.sid = lat, lon, sid
 
 
+def km(lat, lon, lat2, lon2):
+    """the distance between two positions, in kilometres (on a sphere)"""
+    import math
+    dlat, dlon = math.radians(lat2 - lat), math.radians(lon2 - lon)
+    a = (math.sin(dlat / 2) ** 2
+         + math.cos(math.radians(lat)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2) ** 2)
+    return 2 * 6371.0 * math.asin(math.sqrt(min(1.0, a)))
+
+
 def reverse(lat, lon):
     """{'location', 'county', 'state', 'country'} of a position: from the
     index if its cell was asked before, from Nominatim otherwise; None when

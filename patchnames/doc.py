@@ -352,6 +352,9 @@ def sequences(files, rows, gap, is_bird):
 #: a camera named by the initials of its owner only (from a file name): the
 #:  camera itself is not known
 OWNER = re.compile(r'[A-Z]{2}')
+#: a photo of another camera that carries its position is tied all the same
+#:  to the checklist it was taken during, when it is this close to its place
+NEAR_KM = 5.0
 
 
 def anchored(camera, names):
@@ -376,7 +379,11 @@ def locate(seqs, data, rows=None, clock=None, before=None):
     clock: the offset in hours, when the photographer knows it. before:
     {day: hours}, offsets found earlier with more days around, kept for a
     camera that does not record its time zone (a few days alone would not
-    move its clock)."""
+    move its clock). A photo of another camera that carries its own
+    position, taken during a checklist (its clock as it is) within NEAR_KM
+    of its place, is tied to it all the same: the photographer, or his
+    family with him, on the outing. seq['position']: that position, when
+    there are no rows (the index matched again)."""
     rows = rows or {}
     moments, zoned = {}, set()
     for seq in seqs:
@@ -400,6 +407,18 @@ def locate(seqs, data, rows=None, clock=None, before=None):
                 seq['offset'] = offsets.get(seq['camera'], {}).get(day, 0.0)
             seq['match'] = data.match(seq['when'], seq['offset'])
         row = rows.get(seq['names'][len(seq['names']) // 2], {})
+        position = seq.get('position')
+        if own_position(row):
+            try:
+                position = float(row['GPSLatitude']), float(row['GPSLongitude'])
+            except (KeyError, TypeError, ValueError):
+                position = None
+        if data is not None and seq['when'] and not seq['anchored'] and position:
+            # (another camera, where and when a checklist was: tied to it, and to it alone)
+            match = data.match(seq['when'], 0.0)
+            listed = match.checklist
+            if listed and listed.lat is not None and geo.km(*position, listed.lat, listed.lon) <= NEAR_KM:
+                seq['match'] = match._replace(others=[])
         if not own_position(row):
             continue
         # a position of its own (a phone): the photo keeps it and its place is
@@ -1089,7 +1108,7 @@ def ebird_text(seq):
                      f"{_ebird.country_name(spot.country)}).")
         if match is None or not match.checklist:
             return lines[0] + ' Pas de liste eBird ("liste" : null).'
-    if not seq.get('anchored', True):
+    if not seq.get('anchored', True) and not (match and match.checklist):
         return ("Cette photo vient d'un téléphone ou d'un autre appareil que celui avec lequel le "
                 'photographe tient ses listes eBird (souvent un membre de sa famille) : identifie '
                 'sans a priori ("liste" : null).')
@@ -1240,7 +1259,7 @@ def _say(seq):
     match = seq.get('match')
     clock = f' (horloge {seq["offset"]:+g} h)' if seq.get('offset') else ''
     own = f'position de la photo : {seq["gps"].location}' if seq.get('gps') else ''
-    if not seq.get('anchored', True):
+    if not seq.get('anchored', True) and not (match and match.checklist):
         return own or 'téléphone ou autre appareil : pas de liste eBird'
     if match and match.checklist:
         how = 'pendant' if match.kind == 'inside' else "à moins d'une heure de"
@@ -1861,7 +1880,7 @@ def rematch():
     learn_cameras(db)
     place = ('location', 'county', 'state', 'country', 'lat', 'lon')
     rows = db.execute('SELECT name, seq, taken, bird, camera, zone, latin, match, checklist, '
-                      f'clock_offset, own_position, {", ".join(place)} FROM photos '
+                      f'clock_offset, own_position, written, {", ".join(place)} FROM photos '
                       'WHERE rep = 1 AND taken IS NOT NULL').fetchall()
     seqs, unknown = [], 0
     for row in rows:
@@ -1871,7 +1890,10 @@ def rematch():
             continue
         seqs.append({'names': [row['name']], 'bird': bool(row['bird']), 'zone': row['zone'],
                      'camera': row['camera'] or (parsed.group(3) if parsed else '') or '',
-                     'when': datetime.fromisoformat(row['taken']), 'row': row})
+                     'when': datetime.fromisoformat(row['taken']), 'row': row,
+                     # (the position the photo carries, which can tie it to a checklist)
+                     'position': (row['lat'], row['lon']) if row['own_position']
+                     and row['lat'] is not None else None})
     locate(seqs, data)
     changed, dropped = [], 0
     for seq in seqs:
