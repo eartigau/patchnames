@@ -349,9 +349,29 @@ def sequences(files, rows, gap, is_bird):
     return out
 
 
+#: a camera named by the initials of its owner only (from a file name): the
+#:  camera itself is not known
+OWNER = re.compile(r'[A-Z]{2}')
+
+
+def anchored(camera, names):
+    """whether photos are tied to the photographer's eBird checklists, for
+    their time and their place: those of the camera he goes birding with,
+    which makes NEF files (a NEF, or a JPEG or a DNG made from one, which
+    keeps the name of the camera). Not those of a phone, which members of
+    the family take too, nor of anything else. A photo whose camera is not
+    known is one of them if it is a NEF or a DNG."""
+    camera = '' if not camera or OWNER.fullmatch(camera) else camera
+    if camera:
+        return 'NIKON' in camera.upper()
+    return any(os.path.splitext(name)[1].lower() in ('.nef', '.dng') for name in names)
+
+
 def locate(seqs, data, rows=None, clock=None, before=None):
     """give each sequence its clock offset and its eBird match: the offsets
     come from the bird sequences of each camera and apply to all it took.
+    Only the photos of the camera of the checklists are matched (anchored):
+    the others keep their clock and get no checklist.
 
     clock: the offset in hours, when the photographer knows it. before:
     {day: hours}, offsets found earlier with more days around, kept for a
@@ -360,7 +380,8 @@ def locate(seqs, data, rows=None, clock=None, before=None):
     rows = rows or {}
     moments, zoned = {}, set()
     for seq in seqs:
-        if seq['bird'] and seq['when']:
+        seq['anchored'] = anchored(seq['camera'], seq['names'])
+        if seq['bird'] and seq['when'] and seq['anchored']:
             moments.setdefault(seq['camera'], []).append((seq['when'], seq.get('zone')))
             if seq.get('zone') is not None:
                 zoned.add(seq['camera'])
@@ -368,8 +389,8 @@ def locate(seqs, data, rows=None, clock=None, before=None):
     if data and clock is None:
         offsets = {camera: data.offsets(*zip(*pairs)) for camera, pairs in moments.items()}
     for seq in seqs:
-        seq['offset'], seq['match'], seq['gps'] = float(clock or 0.0), None, None
-        if data is not None and seq['when']:
+        seq['offset'], seq['match'], seq['gps'] = float(clock or 0.0) * seq['anchored'], None, None
+        if data is not None and seq['when'] and seq['anchored']:
             day = seq['when'].date()
             if clock is not None:
                 pass
@@ -1068,6 +1089,10 @@ def ebird_text(seq):
                      f"{_ebird.country_name(spot.country)}).")
         if match is None or not match.checklist:
             return lines[0] + ' Pas de liste eBird ("liste" : null).'
+    if not seq.get('anchored', True):
+        return ("Cette photo vient d'un téléphone ou d'un autre appareil que celui avec lequel le "
+                'photographe tient ses listes eBird (souvent un membre de sa famille) : identifie '
+                'sans a priori ("liste" : null).')
     if match is None or not (match.checklist or match.others):
         return ("Le photographe n'a pas de liste eBird ce jour-là : identifie sans a priori "
                 '("liste" : null).')
@@ -1215,6 +1240,8 @@ def _say(seq):
     match = seq.get('match')
     clock = f' (horloge {seq["offset"]:+g} h)' if seq.get('offset') else ''
     own = f'position de la photo : {seq["gps"].location}' if seq.get('gps') else ''
+    if not seq.get('anchored', True):
+        return own or 'téléphone ou autre appareil : pas de liste eBird'
     if match and match.checklist:
         how = 'pendant' if match.kind == 'inside' else "à moins d'une heure de"
         return (f'{how} la liste eBird {match.checklist.sid}, {match.checklist.label()}{clock}'
@@ -1820,29 +1847,37 @@ def rematch():
     the index alone: after a new export (a list entered after its photos were
     indexed) or a change in the matching. What Claude said is kept, and so is
     a list Claude chose itself; photos placed by the position they carry
-    may change checklist, not place."""
+    may change checklist, not place. Only the photos of the camera of the
+    checklists are tied to them (see anchored): the camera of the JPEG
+    sequences the index was given from their names alone is read first
+    from their files; those out of reach are left as they are. The files of
+    the sequences whose checklist or place changed are to be written again."""
     data = _ebird.load(quiet=False)
     if data is None:
         print('Pas de données eBird (voir `patchdoc ebird`).')
         return
     db = photoindex.connect()
     photoindex.sync_ebird(db, data)
+    learn_cameras(db)
     place = ('location', 'county', 'state', 'country', 'lat', 'lon')
     rows = db.execute('SELECT name, seq, taken, bird, camera, zone, latin, match, checklist, '
                       f'clock_offset, own_position, {", ".join(place)} FROM photos '
                       'WHERE rep = 1 AND taken IS NOT NULL').fetchall()
-    seqs = []
+    seqs, unknown = [], 0
     for row in rows:
         parsed = NAME.match(row['name'])
+        if row['camera'] is None and not anchored(None, [row['name']]):
+            unknown += 1        # (a JPEG whose camera is not known yet: left as it is)
+            continue
         seqs.append({'names': [row['name']], 'bird': bool(row['bird']), 'zone': row['zone'],
                      'camera': row['camera'] or (parsed.group(3) if parsed else '') or '',
                      'when': datetime.fromisoformat(row['taken']), 'row': row})
     locate(seqs, data)
-    changed = []
+    changed, dropped = [], 0
     for seq in seqs:
         row = seq['row']
         kept, checklist = settle(seq, None, data)
-        if row['match'] == 'other':
+        if row['match'] == 'other' and seq['anchored']:
             continue
         if row['own_position']:
             kept.update({key: row[key] for key in place}, match=kept['match'] or 'gps')
@@ -1858,12 +1893,47 @@ def rematch():
             (kept['checklist'], kept['match'], kept['clock_offset'], on_list, kept['location'],
              kept['county'], kept['state'], kept['country'], kept['lat'], kept['lon'],
              photoindex.place_text(kept), f"{kept['clock_offset']:+g} hours", row['seq']))
+        if (kept['checklist'], kept['location']) != (row['checklist'], row['location'] or ''):
+            # (what the files say of their checklist and their place is to be written again)
+            db.execute("UPDATE photos SET written = 'pending' WHERE seq = ? AND written IS NOT NULL "
+                       "AND written != 'pending'", (row['seq'],))
+            dropped += bool(row['checklist']) and not seq['anchored']
         changed.append(row['name'])
     photoindex._derive(db, changed)
     db.commit()
     db.close()
     print(f"Liste eBird ou horloge changée pour {_count(len(changed), 'séquence')} "
-          f'sur {len(seqs)}.')
+          f'sur {len(seqs)}' + (f", dont {dropped} d'un autre appareil que celui des listes, "
+                               'qui n\'y sont plus rattachées' if dropped else '') + '.'
+          + (f" {_count(unknown, 'séquence')} JPEG dont l'appareil n'a pas pu être lu "
+             '(disque non monté ?) : laissées telles quelles.' if unknown else ''))
+
+
+def learn_cameras(db, chunk=400):
+    """read from their files the camera of the JPEG sequences the index was
+    given from their names alone (it tells the photos of the camera of the
+    checklists from those of a phone: see anchored); '' for a file that
+    names none. The files out of reach are left for another time."""
+    rows = db.execute("SELECT name, path, seq FROM photos WHERE rep = 1 AND camera IS NULL "
+                      "AND ext IN ('jpg', 'jpeg')").fetchall()
+    if rows:
+        print(f"Lecture de l'appareil de {_count(len(rows), 'séquence')} JPEG ...")
+    done = 0
+    for start in range(0, len(rows), chunk):
+        part = {photoindex.resolve(row['path']): row for row in rows[start:start + chunk]}
+        part.pop(None, None)
+        if not part:
+            continue
+        for found in remote.rows(['-fast2', '-Model'], list(part)):
+            row = part.get(found['SourceFile'])
+            if row is not None:
+                db.execute('UPDATE photos SET camera = ? WHERE seq = ? AND camera IS NULL',
+                           (str(found.get('Model') or ''), row['seq']))
+                done += 1
+        db.commit()
+        print(f'  {min(start + chunk, len(rows))}/{len(rows)}', end='\r', flush=True)
+    if rows:
+        print(f"\nAppareil lu pour {_count(done, 'séquence')} sur {len(rows)}.")
 
 
 def _archive_pictures(frames, full, tmpdir, row, sheet):
@@ -2152,6 +2222,20 @@ def write_sequence(seq_id, progress=None, chunk=6):
     middle = paths[todo[len(todo) // 2]]
     seen = read_exif([middle], fast=True).get(middle, {})
     own = own_position(seen)
+    # a file tied by patchdoc to a checklist it is no longer tied to (the
+    #   photo of a phone): the checklist, and the place and the position
+    #   that came from it, are taken out of it
+    clear = []
+    if not row['checklist'] and str(seen.get('Event') or '').startswith('eBird S'):
+        clear = ['-XMP-iptcExt:Event=']
+        if not row['location']:
+            clear += [f'-{tag}=' for tag in (
+                'XMP-iptcCore:Location', 'IPTC:Sub-location', 'XMP-photoshop:City', 'IPTC:City',
+                'XMP-photoshop:State', 'IPTC:Province-State', 'XMP-photoshop:Country',
+                'IPTC:Country-PrimaryLocationName', 'XMP-iptcCore:CountryCode')]
+        if str(seen.get('GPSAreaInformation') or '').startswith(GPS_MARK):
+            clear += [f'-{tag}=' for tag in ('GPSLatitude', 'GPSLatitudeRef', 'GPSLongitude',
+                                             'GPSLongitudeRef', 'GPSMapDatum', 'GPSAreaInformation')]
     if own and not row['own_position']:
         # photos indexed from their names, their position unknown until now:
         #   their place is named from it, here and in the index
@@ -2163,7 +2247,7 @@ def write_sequence(seq_id, progress=None, chunk=6):
             placed = dict(_place(spot), own_position=1, match=row['match'] or 'gps')
             photoindex.put(db, [dict(placed, name=frame['name']) for frame in frames])
             said.update(placed)
-    if not file_tags(answer_of(row), said, checklist):
+    if not file_tags(answer_of(row), said, checklist) and not clear:
         raise RuntimeError("la base n'a rien à écrire pour cette séquence (ni description, "
                            'ni liste eBird)')
     rows = {paths[name]: ({'GPSLatitude': 0} if own else {}) for name in todo}
@@ -2178,7 +2262,8 @@ def write_sequence(seq_id, progress=None, chunk=6):
     for start in range(0, len(todo), chunk):
         # (each frame its own tags, a few frames to a run of exiftool)
         part = todo[start:start + chunk]
-        write_groups([(file_tags(answer_of(row), dict(said, **mine), checklist),
+        # (what is taken out first: a place found since is written after it, and stays)
+        write_groups([(clear + file_tags(answer_of(row), dict(said, **mine), checklist),
                        [paths[name] for name in group]) for mine, group in _groups_of(part, notes)],
                      rows, backup=bool(cfg.get('gui_backup')))
         db.execute(f'UPDATE photos SET written = ? WHERE name IN ({", ".join("?" * len(part))})',

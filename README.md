@@ -349,6 +349,26 @@ de la liste, photos d'oiseaux sans liste).
 - **Fichiers bruts.** « Ouvrir avec Affinity » ouvre le NEF affiché dans
   l'application de la config `raw_app`.
 
+### Seules les photos du Nikon suivent les listes eBird
+
+Les listes eBird ne disent l'heure et le lieu que des photos de l'appareil
+avec lequel elles sont tenues : celles du Nikon, c'est-à-dire un NEF, ou un
+JPEG ou un DNG tiré d'un NEF (il garde le nom de l'appareil). Seules
+celles-là sont rattachées à une liste, prennent son lieu, et voient leur
+horloge corrigée d'après elle. Une photo de cellulaire, que prend aussi la
+famille, ou d'un fichier qui ne nomme aucun appareil (une image reçue par
+une messagerie) garde son heure, n'a pas de liste, et n'a de lieu que s'il
+vient de sa propre position ; Claude l'identifie sans a priori.
+
+`patchdoc index --rematch` applique cette règle à la base : il lit d'abord,
+dans leurs fichiers, l'appareil des séquences JPEG que la base ne connaît
+que par leur nom (celles dont le fichier est hors d'atteinte sont laissées
+telles quelles), puis retire leur liste à celles qui ne sont pas du Nikon.
+Les fichiers où patchdoc avait écrit cette liste sont récrits : la liste,
+et le lieu et la position qui en venaient, en sont retirés. Une photo JPEG
+ajoutée d'après son nom seul (`patchdoc index`) n'est rattachée à une
+liste qu'une fois son appareil lu.
+
 ### Les lieux des photos de cellulaire
 
 Une photo qui porte sa propre position la garde et reçoit son lieu de cette
