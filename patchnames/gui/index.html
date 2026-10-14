@@ -125,6 +125,7 @@
               <option value="offlist">les esp&egrave;ces absentes de la liste eBird</option>
               <option value="nolist">les photos d&rsquo;oiseaux sans liste eBird</option>
               <option value="manual">les photos rattach&eacute;es &agrave; la main &agrave; une liste</option>
+              <option value="oriented">les photos tourn&eacute;es par Claude</option>
             </select>
           </label>
           <input id="sort" type="hidden" value="new">
@@ -154,9 +155,11 @@
         <button id="batchGo" class="pill go" type="button"></button>
         <button id="batchAll" class="pill go" type="button" hidden></button>
         <button id="batchStop" class="pill" type="button" hidden>Arr&ecirc;ter</button>
+        <button id="orientGo" class="pill" type="button" hidden></button>
         <div id="batchBar" class="progress" hidden><div id="batchFill"></div></div>
         <span id="batchStatus" class="mono"></span>
         <div id="batchJobs" class="mono lines"></div>
+        <span id="orientStatus" class="mono"></span>
       </div>
       <div class="tabs sorts" id="sorts">
         <span class="mono">Tri :</span>

@@ -66,6 +66,8 @@ COLUMNS = ('name', 'path', 'stem', 'ext',
            'own_position',     # 1 when lat and lon are the position the photo carries itself
                                #   (a phone) and the place is named from it, not from the
                                #   checklist
+           'oriented',        # 'ok' once Claude found the photo the right way up, 'claude'
+                              #   when it turned it (doc.orient); NULL if nobody looked
            'turned',          # how many times the pictures kept of the photo were made again
                               #   another way up: the page then asks for them anew
            'upright',         # 1 once those pictures, and what is placed on them (eye,
@@ -554,6 +556,8 @@ def _where(q='', species='', listed=False, place='', region='', year='', since='
         where.append('p.bird = 1 AND p.checklist IS NULL')
     elif flag == 'manual':
         where.append("p.match = 'manual'")
+    elif flag == 'oriented':
+        where.append("p.oriented = 'claude'")
     if checklist:
         where.append('p.checklist = ?')
         args.append(checklist)

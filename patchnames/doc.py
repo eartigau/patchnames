@@ -2497,6 +2497,117 @@ def turn(name, way, whole=False):
         db.close()
 
 
+#: the photos Claude is shown at once to tell those that lie on their side
+ORIENT_SHEET = 16
+ORIENT_PROMPT = """Voici une planche de {count} photos numérotées, chacune avec son numéro en jaune en haut à gauche de sa case. Lis-la avec l'outil Read : {sheet}
+
+Pour chaque photo, dis si elle est à l'endroit. La plupart le sont. Une photo est couchée quand le haut de la scène est sur un côté (un horizon vertical, des personnes, des arbres ou des bâtiments couchés, un texte qui se lit de bas en haut ou de haut en bas), ou à l'envers. Pour une photo de document, de page ou d'écran, l'endroit est celui où le texte se lit normalement. Regarde chaque case une à une : un texte, une étiquette, un livre ou un écran dont les lettres sont verticales trahit une photo couchée. Un oiseau photographié en vol ou la tête en bas, un écureuil qui descend un tronc, une vue prise vers le ciel ou vers le sol ne sont pas couchés. Le photographe préfère quelques photos tournées à tort à des photos couchées oubliées : dans le doute, signale-la.
+
+Réponds par la liste des photos à tourner ("a_tourner", vide s'il n'y en a pas), chacune avec le sens dans lequel la tourner pour la remettre à l'endroit : "horaire" (un quart de tour dans le sens des aiguilles d'une montre), "antihoraire" (un quart de tour dans l'autre sens) ou "demi-tour"."""
+ORIENT_SCHEMA = {'type': 'object', 'required': ['a_tourner'], 'properties': {'a_tourner': {
+    'type': 'array', 'items': {'type': 'object', 'required': ['n', 'sens'], 'properties': {
+        'n': {'type': 'integer'},
+        'sens': {'type': 'string', 'enum': ['horaire', 'antihoraire', 'demi-tour']}}}}}}
+
+
+def _orient_sheet(names, path):
+    """the thumbnails of photos on one numbered sheet, for Claude to look at
+    (each in a square, as it is, without being turned to fill it)"""
+    from PIL import Image, ImageDraw
+    cell, columns = 330, 4
+    rows = (len(names) + columns - 1) // columns
+    page = Image.new('RGB', (cell * columns, cell * rows), (40, 40, 40))
+    draw = ImageDraw.Draw(page)
+    for k, name in enumerate(names):
+        thumb = Image.open(photoindex.thumb_path(name)).convert('RGB')
+        thumb.thumbnail((cell - 14, cell - 14))
+        x, y = (k % columns) * cell, (k // columns) * cell
+        page.paste(thumb, (x + (cell - thumb.width) // 2, y + (cell - thumb.height) // 2))
+        draw.rectangle((x + 2, y + 2, x + 34, y + 24), fill=(0, 0, 0))
+        draw.text((x + 7, y + 6), str(k + 1), fill='yellow')
+    page.save(path, quality=88)
+
+
+def orient_left(db):
+    """how many sequences orient has yet to look at, now"""
+    return db.execute("SELECT COUNT(*) FROM photos WHERE rep = 1 AND oriented IS NULL AND "
+                      "(upright = 1 OR ext IN ('jpg', 'jpeg'))").fetchone()[0]
+
+
+def orient(stop=None, tell=None, model=None, effort=None, most=None, dry=False, hold=None):
+    """Have Claude find the photos that lie on their side or upside down
+    (an old camera without a sensor of its position, a document photographed
+    flat) and turn them as the arrows of the page do: only the Orientation
+    of their files is rewritten (see turn), for every frame of the sequence.
+    Claude sees the thumbnails the index keeps, ORIENT_SHEET to a sheet, the
+    newest first; a photo whose thumbnail is not yet as its file says (see
+    straighten) waits. What Claude found is kept (column oriented): 'ok', or
+    'claude' for a photo it turned, which the page finds again. most: at most
+    that many photos; dry: say what would be turned, change nothing; hold(seq):
+    see inbox._free. tell(counts) after each sheet. Returns {'looked',
+    'turned', 'left', 'cost', 'found'}, found: [(name, way)]."""
+    from contextlib import nullcontext
+    hold = hold or (lambda seq: nullcontext(True))
+    model = model or _cfg().get('orient_model')
+    effort = effort or _cfg().get('orient_effort')
+    db = photoindex.connect()
+    try:
+        rows = [row for row in db.execute(
+            "SELECT name, seq FROM photos WHERE rep = 1 AND oriented IS NULL AND "
+            "(upright = 1 OR ext IN ('jpg', 'jpeg')) ORDER BY COALESCE(local, taken) DESC")
+            if os.path.isfile(photoindex.thumb_path(row['name']))]
+        rows = rows[:most] if most else rows
+        out = {'looked': 0, 'turned': 0, 'left': len(rows), 'cost': 0.0, 'found': []}
+        ways = {'horaire': ['cw'], 'antihoraire': ['ccw'], 'demi-tour': ['cw', 'cw']}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            for start in range(0, len(rows), ORIENT_SHEET):
+                if stop is not None and stop.is_set():
+                    break
+                part = rows[start:start + ORIENT_SHEET]
+                sheet = os.path.join(tmpdir, f'planche_{start}.jpg')
+                _orient_sheet([row['name'] for row in part], sheet)
+                answer, cost = ask_claude(ORIENT_PROMPT.format(count=len(part), sheet=sheet), tmpdir,
+                                          model, effort, schema=ORIENT_SCHEMA, needs=())
+                out['cost'] += cost
+                turned = {}
+                for item in answer.get('a_tourner') or []:
+                    try:
+                        turned[part[int(item['n']) - 1]['seq']] = ways[item['sens']]
+                    except (KeyError, IndexError, TypeError, ValueError):
+                        continue
+                states = {}
+                for row in part:
+                    if row['seq'] in turned:
+                        out['found'].append((row['name'], ' '.join(turned[row['seq']])))
+                    if dry:
+                        continue
+                    states[row['seq']] = 'ok'
+                    if row['seq'] in turned:
+                        # (turned before anything is written here: turn writes with its own
+                        #   connection to the index)
+                        with hold(row['seq']) as mine:
+                            if not mine:
+                                del states[row['seq']]
+                                continue
+                            try:
+                                for way in turned[row['seq']]:
+                                    turn(row['name'], way, whole=True)
+                                states[row['seq']] = 'claude'
+                                out['turned'] += 1
+                            except RuntimeError:
+                                del states[row['seq']]      # (its files out of reach: it waits)
+                db.executemany('UPDATE photos SET oriented = ? WHERE seq = ?',
+                               [(state, seq) for seq, state in states.items()])
+                db.commit()
+                out['looked'] += len(part)
+                out['left'] -= len(part)
+                if tell:
+                    tell(dict(out, found=len(out['found'])))
+        return out
+    finally:
+        db.close()
+
+
 def pending_writes():
     """the sequences whose files still wait for what the index says of them"""
     db = photoindex.connect()
@@ -2667,6 +2778,15 @@ def main():
     p_backup.add_argument('--restaurer', metavar='FICHIER', default=None,
                           help='Relire une sauvegarde téléchargée, dans photos.restauree.sqlite.')
 
+    p_orient = sub.add_parser(
+        'redresser', help='Faire trouver par Claude les photos couchées ou à l\'envers, et les '
+                          'tourner (seule l\'étiquette Orientation du fichier est récrite).')
+    p_orient.add_argument('--max', type=int, default=None, help='Au plus ce nombre de photos.')
+    p_orient.add_argument('--essai', action='store_true',
+                          help='Dire seulement ce qui serait tourné, sans rien changer.')
+    p_orient.add_argument('--modele', default=None,
+                          help='Le modèle de Claude (config orient_model, sonnet).')
+
     p_app = sub.add_parser(
         'app', help="Faire l'application patchdoc et la mettre dans le Dock : un clic démarre "
                     "la page de recherche et l'ouvre.")
@@ -2674,6 +2794,14 @@ def main():
                        help="Faire l'application dans ~/Applications sans toucher au Dock.")
 
     args = parser.parse_args()
+    if args.cmd == 'redresser':
+        said = lambda out: print(f"  {out['looked']} regardées, {out['turned']} tournées, "
+                                 f"{out['left']} à regarder", flush=True)
+        out = orient(tell=said, model=args.modele, most=args.max, dry=args.essai)
+        for name, way in out['found']:
+            print(f"  {'à tourner' if args.essai else 'tournée'} : {name} ({way})")
+        print(f"Claude : {out['cost']:.2f} $ US au prix de l'API.")
+        return
     if args.cmd == 'app':
         from . import macapp
         macapp.install(dock=not args.sans_dock)

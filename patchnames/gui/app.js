@@ -294,6 +294,49 @@ async function batchAll() {
   watchBatch();
 }
 
+// Claude's look for the photos that lie on their side: a button that starts
+// it (a first click says what a second one does) or stops it, and how far it is
+const orientState = { timer: null, armed: 0 };
+
+async function showOrient(data) {
+  clearTimeout(orientState.timer);
+  if (!data) {
+    try { data = await (await fetch("/api/orient")).json(); } catch (err) { return; }
+  }
+  if (data.state === undefined) return;          // a server from before this
+  const running = data.state === "running";
+  const go = $("orientGo");
+  go.hidden = false;
+  go.className = "pill" + (running ? "" : data.left_now ? " go" : "");
+  go.disabled = !running && !data.left_now;
+  if (Date.now() - orientState.armed > 8000) {
+    go.textContent = running ? "Arrêter le redressement"
+      : data.left_now ? `Redresser les photos couchées avec Claude : ${plural(data.left_now, "séquence", "séquences")} à regarder`
+      : "Toutes les photos ont été regardées";
+  }
+  go.title = "Claude regarde les vignettes, seize à la fois, et tourne les photos couchées ou à l'envers comme le font les flèches "
+    + "(seule l'étiquette Orientation du fichier est récrite). « Afficher : les photos tournées par Claude » les retrouve.";
+  const total = (data.looked || 0) + (data.left || 0);
+  $("orientStatus").textContent = running
+    ? `Redressement : ${number(data.looked || 0)} sur ${number(total)} séquences regardées, ${plural(data.turned || 0, "tournée", "tournées")}.`
+    : data.state === "error" ? "Le redressement a échoué : " + data.error
+    : data.state === "done" ? `Redressement fini : ${number(data.looked || 0)} regardées, ${plural(data.turned || 0, "tournée", "tournées")}.`
+    : data.turned_all ? `${plural(data.turned_all, "séquence a été tournée", "séquences ont été tournées")} par Claude jusqu'ici.` : "";
+  if (running) orientState.timer = setTimeout(showOrient, 3000);
+}
+
+async function orientGo() {
+  const data = await (await fetch("/api/orient")).json();
+  if (data.state === "running") return showOrient(await post("/api/orient", { go: false }));
+  if (Date.now() - orientState.armed > 8000) {
+    orientState.armed = Date.now();
+    $("orientGo").textContent = `Confirmer : ${plural(data.left_now, "séquence", "séquences")} montrées à Claude, seize à la fois, en arrière-plan`;
+    return;
+  }
+  orientState.armed = 0;
+  showOrient(await post("/api/orient", { go: true }));
+}
+
 // seconds as a clock: 75 -> "1:15", 3700 -> "1 h 01"
 function clock(seconds) {
   seconds = Math.max(0, Math.round(seconds));
@@ -1633,6 +1676,7 @@ async function start() {
   });
   $("batchGo").addEventListener("click", batchGo);
   $("batchAll").addEventListener("click", batchAll);
+  $("orientGo").addEventListener("click", orientGo);
   $("batchStop").addEventListener("click", async () => { await post("/api/batch/stop"); watchBatch(); });
   $("viewerClose").addEventListener("click", closeViewer);
   $("viewerPrev").addEventListener("click", () => step(-1));
@@ -1658,6 +1702,7 @@ async function start() {
   showArchive();
   showInbox();
   showBackup();
+  showOrient();
 }
 
 start().catch((err) => { $("status").textContent = "La page n'a pas pu démarrer : " + err.message; });

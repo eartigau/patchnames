@@ -68,6 +68,10 @@ DEFAULTS = {
     #   for their time and their place (doc.anchored). The D100, the D90, the
     #   Coolpix (E4500...) and the two Z 50
     'ebird_cameras': r'\bD100\b|\bD90\b|COOLPIX|^E\d{3,4}$|\bZ ?50(_2)?$',
+    # the model and the effort of Claude when it looks for photos on their side
+    #   (doc.orient): Haiku misses some that Sonnet finds
+    'orient_model': 'sonnet',
+    'orient_effort': 'low',
     # the backup of the index on GitHub (backup.py): the private repository it
     #   goes to, 'account/name' (None: patchdoc-sauvegarde of the account gh is
     #   logged in to), and how many backups are kept there

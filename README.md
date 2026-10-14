@@ -596,6 +596,22 @@ l'appel à Claude le demandent.
   récrite, avec exiftool ; l'image elle-même ne l'est pas, donc rien ne se
   perd et la rotation se défait par la flèche inverse. Pour un HEIC, la
   rotation de son conteneur, que macOS suit, est récrite avec elle.
+- **Redresser avec Claude.** Le bouton « Redresser les photos couchées avec
+  Claude », sous la recherche, ou `patchdoc redresser`, montre à Claude les
+  vignettes des séquences, seize sur une planche numérotée, les plus
+  récentes d'abord, et tourne celles qu'il trouve couchées ou à l'envers
+  comme le font les flèches (seule l'étiquette `Orientation` est récrite).
+  Un premier clic dit combien de séquences seront regardées, un second
+  lance le travail en arrière-plan ; le même bouton l'arrête, et une
+  relance reprend où il en était. Claude penche vers le doute : quelques
+  photos tournées à tort valent mieux que des photos couchées oubliées.
+  « Afficher : les photos tournées par Claude » les retrouve, et la flèche
+  inverse défait une erreur. Une photo dont la vignette n'est pas encore
+  faite, ou pas encore refaite debout (ci-dessus), attend son tour.
+  Sonnet (config `orient_model`) coûte environ 3 cents US par planche au
+  prix de l'API ; Haiku, essayé, laissait passer des photos couchées
+  évidentes. `patchdoc redresser --essai --max 48` dit ce qui serait tourné
+  sans rien toucher.
 - **Le sablier.** Dans la visionneuse, une vue dont l'aperçu n'est pas
   encore gardé est lue dans la photo elle-même, ce qui prend un moment sur
   un disque réseau : un sablier le dit, sur la vue d'avant assombrie.

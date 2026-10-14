@@ -11,6 +11,8 @@ The page (gui/index.html, app.js) asks for:
     /api/checklist?sid=      an eBird checklist and its species
     /api/day?date=           the eBird checklists of a day
     /api/attach              (POST) tie a sequence to a checklist by hand, or untie it
+    /api/orient              how the look for photos on their side goes; (POST)
+                             start it or stop it (doc.orient)
     /thumb/NAME /preview/NAME   the images of a photo
     /eye/NAME                the eye of the bird of a photo at full resolution
     /api/reveal, /api/open   (POST) show a photo in the Finder, open it
@@ -144,6 +146,9 @@ _wake, _writing = threading.Event(), set()
 _sync, _sync_stop = {'state': 'idle'}, threading.Event()
 #: the look at the photos that wait to be sent to the archive (doc.index_inbox)
 _inbox = {'state': 'idle'}
+#: Claude's look for the photos that lie on their side (doc.orient): 'idle',
+#:  'running', 'done' or 'error', with its counts; _orient_stop ends it
+_orient, _orient_stop = {'state': 'idle'}, threading.Event()
 #: the backup of the index on GitHub (backup.py): 'idle', 'running' (with the
 #:  stage it is at), 'done' or 'error'
 _backup = {'state': 'idle'}
@@ -378,6 +383,36 @@ def _copies():
     return {'copies': [dict(copy, server=bool(copy['remote']), look=_looked(copy['root']))
                        for copy in sync.copies()],
             'sync': state}
+
+
+def _orient_status():
+    """how the look for photos on their side goes, and how many are left"""
+    from .doc import orient_left
+    db = _db()
+    left = orient_left(db)
+    turned = db.execute("SELECT COUNT(*) FROM photos WHERE rep = 1 AND oriented = 'claude'").fetchone()[0]
+    db.close()
+    return dict(_orient, left_now=left, turned_all=turned)
+
+
+def _orient_job():
+    from .doc import orient
+
+    @contextmanager
+    def hold(seq):
+        mine = _claim(seq, _orient_stop)
+        try:
+            yield mine
+        finally:
+            if mine:
+                _release(seq)
+    try:
+        found = orient(stop=_orient_stop, tell=_orient.update, hold=hold)
+        _orient.update(found, found=len(found['found']), state='done', ended=time.time())
+    except Exception as exc:
+        _orient.update(state='error', error=str(exc), ended=time.time())
+    finally:
+        _wake.set()
 
 
 def _backup_status():
@@ -1056,6 +1091,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, _inbox_status())
             elif url.path == '/api/backup':
                 self._send(200, _backup_status())
+            elif url.path == '/api/orient':
+                self._send(200, _orient_status())
             elif url.path == '/api/faces':
                 self._send(200, _faces(os.path.basename(args.get('name', ''))))
             else:
@@ -1074,7 +1111,7 @@ class Handler(BaseHTTPRequestHandler):
                 '/api/batch/stop', '/api/face', '/api/pano', '/api/rotate', '/api/archive/use',
                 '/api/archive/look', '/api/sync',
                 '/api/sync/stop', '/api/species', '/api/inbox', '/api/inbox/act',
-                '/api/inbox/stop', '/api/backup', '/api/quit', '/api/attach'):
+                '/api/inbox/stop', '/api/backup', '/api/quit', '/api/attach', '/api/orient'):
             self._send(403, {'error': 'refusé'})
             return
         try:
@@ -1109,6 +1146,20 @@ class Handler(BaseHTTPRequestHandler):
                         self._send(200, dict(_copies(), error='Une copie est déjà en cours.'))
                         return
                 self._send(200, _copies())
+                return
+            if self.path == '/api/orient':
+                if body.get('go'):
+                    with _lock:
+                        busy = _orient.get('state') == 'running'
+                        if not busy:
+                            _orient.clear()
+                            _orient.update(state='running', started=time.time(), looked=0, turned=0)
+                    if not busy:
+                        _orient_stop.clear()
+                        threading.Thread(target=_orient_job, daemon=True).start()
+                else:
+                    _orient_stop.set()
+                self._send(200, _orient_status())
                 return
             if self.path == '/api/attach':
                 # a sequence tied to a checklist by hand, or untied
