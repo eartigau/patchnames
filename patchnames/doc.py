@@ -495,7 +495,7 @@ def settle(seq, answer, data):
     species = answer.get('especes') or []
     # a photo taken near a list, not during it, is not held against the list
     on_list = _on_list([sp.get('latin', '') for sp in species],
-                       checklist if kind in ('inside', 'other') else None)
+                       checklist if kind in ('inside', 'other', 'manual') else None)
     # a note is for a photo that does not fit its list: none when every
     #   species named is on it (a small model writes one anyway)
     note = '' if on_list == 1 else (answer.get('note_ebird') or '').strip()
@@ -714,6 +714,8 @@ def said_of(seq, rows, data):
     if said.get('checklist') and data and said['checklist'] in data.lists:
         # the checklist written in the file, rather than the one of its hours
         checklist, during = data.lists[said['checklist']], True
+        if not seq.get('anchored', True) and kept['match'] in (None, 'gps'):
+            kept['match'] = 'manual'        # (the matching would not have: it was tied by hand)
         if not seq.get('gps'):
             kept.update(_place(checklist))
     if said:
@@ -1122,8 +1124,9 @@ def ebird_text(seq):
         lines.append(f"L'horloge de l'appareil semble décalée de {match.offset:+g} h : "
                      f"l'heure sur place serait {match.local:%Y-%m-%d %H:%M}.")
     if match.checklist:
-        how = ('dont les heures contiennent la séquence' if match.kind == 'inside'
-               else "la plus proche de la séquence (à moins d'une heure)")
+        how = {'inside': 'dont les heures contiennent la séquence',
+               'manual': 'à laquelle le photographe a lui-même rattaché la photo'}.get(
+            match.kind, "la plus proche de la séquence (à moins d'une heure)")
         lines += [f'Liste eBird du photographe {how} :', _list_text(match.checklist, seq['bird'])]
     else:
         lines.append("Aucune liste eBird du photographe ne contient l'heure de la séquence.")
@@ -1902,8 +1905,8 @@ def rematch():
     for seq in seqs:
         row = seq['row']
         kept, checklist = settle(seq, None, data)
-        if row['match'] == 'other' and seq['anchored']:
-            continue
+        if (row['match'] == 'other' and seq['anchored']) or row['match'] in ('manual', 'detached'):
+            continue        # (Claude's choice, or what the photographer did by hand)
         if row['own_position']:
             kept.update({key: row[key] for key in place}, match=kept['match'] or 'gps')
         if (kept['checklist'], kept['match'], kept['clock_offset']) == (
@@ -2032,8 +2035,8 @@ def describe_sequence(seq_id, model=None, effort=None, sheet=12, progress=None):
                             + frame['taken'][10:19]} for frame in frames if frame['taken']}
     exif = read_exif([full]).get(full, {})
     rows[middle['name']] = dict(rows.get(middle['name'], {}), **exif)
-    stored = db.execute('SELECT bird, clock_offset, verified, species, latin FROM photos '
-                        'WHERE name = ?', (middle['name'],)).fetchone()
+    stored = db.execute('SELECT bird, clock_offset, verified, species, latin, match, checklist '
+                        'FROM photos WHERE name = ?', (middle['name'],)).fetchone()
     bird = _focal(exif) > cfg['bird_focal_min'] if _focal(exif) else bool(stored['bird'])
     seq = {'names': names, 'camera': str(exif.get('Model') or ''), 'bird': bird,
            'when': _when(rows[middle['name']]), 'zone': _zone(exif)}
@@ -2044,6 +2047,10 @@ def describe_sequence(seq_id, model=None, effort=None, sheet=12, progress=None):
     data = _ebird.load()
     # the clock offset the index found with the days around is kept
     locate([seq], data, rows, clock=stored['clock_offset'] or 0.0)
+    if stored['match'] in ('manual', 'detached'):
+        # (what the photographer said by hand stays)
+        listed = data.lists.get(stored['checklist']) if data and stored['match'] == 'manual' else None
+        seq['match'] = _ebird.Match(listed, 'manual', 0.0, seq['when'], []) if listed else None
     exifs = {middle['name']: exif}
     with tempfile.TemporaryDirectory() as tmpdir:
         if bird and len(frames) > 1:
@@ -2195,7 +2202,7 @@ def correct_species(seq_id, old, new):
                  if word and word != UNKNOWN and photoindex.fold(word) not in
                  {photoindex.fold(name) for name in (was or ()) if name}]
         listed = None
-        if row['checklist'] and row['match'] in ('inside', 'other'):
+        if row['checklist'] and row['match'] in ('inside', 'other', 'manual'):
             class Listed:
                 names = [found['latin'] for found in db.execute(
                     'SELECT latin FROM observations WHERE sid = ?', (row['checklist'],))]
@@ -2310,6 +2317,47 @@ CLOCKWISE = {1: 6, 6: 3, 3: 8, 8: 1, 2: 7, 7: 4, 4: 5, 5: 2}
 #: the rotation a HEIC file keeps beside its Orientation (quarter turns
 #:  anticlockwise), which is what macOS follows
 HEIC_ROTATION = {1: 0, 8: 1, 3: 2, 6: 3}
+
+
+def attach(seq_id, sid=None):
+    """Tie a sequence to an eBird checklist by hand (sid), or untie it (None):
+    what the photographer knows and the matching cannot (the photo of a
+    phone taken on the outing, a JPEG that lost the name of its camera, a
+    photo tied to the wrong list). It stays so whatever the matching says
+    later (match 'manual' or 'detached'). The place is that of the checklist,
+    unless the photos carry a position of their own; the clock is left as
+    it is; the files wait to be written. Returns the row of the sequence."""
+    db = photoindex.connect()
+    try:
+        row = db.execute('SELECT * FROM photos WHERE seq = ? AND rep = 1', (seq_id,)).fetchone()
+        if row is None:
+            raise RuntimeError('séquence inconnue')
+        changes = {'note': '', 'written': 'pending'}
+        if sid:
+            listed = db.execute('SELECT * FROM checklists WHERE sid = ?', (sid,)).fetchone()
+            if listed is None:
+                raise RuntimeError('liste eBird inconnue')
+
+            class Listed:
+                names = [found['latin'] for found in db.execute(
+                    'SELECT latin FROM observations WHERE sid = ?', (sid,))]
+
+                def latin_names(self):
+                    return self.names
+            changes.update(checklist=sid, match='manual',
+                           on_checklist=_on_list((row['latin'] or '').split(photoindex.SEP), Listed()))
+            if not row['own_position']:
+                changes.update({key: listed[key] for key in
+                                ('location', 'county', 'state', 'country', 'lat', 'lon')})
+        else:
+            changes.update(checklist=None, match='detached', on_checklist=None)
+            if not row['own_position']:
+                changes.update(location='', county='', state='', country='', lat=None, lon=None)
+        names = [frame['name'] for frame in photoindex.sequence(db, seq_id)]
+        photoindex.put(db, [dict(changes, name=name) for name in names])
+        return dict(db.execute('SELECT * FROM photos WHERE seq = ? AND rep = 1', (seq_id,)).fetchone())
+    finally:
+        db.close()
 
 
 def _turn_kept(db, name, full, quarter):

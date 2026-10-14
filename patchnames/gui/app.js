@@ -12,7 +12,8 @@ const FIELDS = ["section", "place_of", "q", "species", "person", "place", "regio
                 "eye", "clear", "level", "flag", "sort"];
 const PAGE = 60;
 const state = { items: [], offset: 0, done: false, loading: false, token: 0, current: -1, checklist: "", total: 0,
-                frames: [], versions: {} };
+                frames: [], versions: {}, days: {} };
+// (state.days: the eBird checklists of each day asked for, to tie a photo to one)
 // (state.versions: for the photos whose pictures were made again another way
 // up, how many times: their addresses change, past what the browser kept)
 const versioned = (rows) => { for (const row of rows || []) if (row && row.turned) state.versions[row.name] = row.turned; };
@@ -1240,6 +1241,46 @@ async function rotate(photo, way, whole, said) {
   show(name);
 }
 
+// the eBird checklists of the day of a photo that has none, each with a
+// button to tie the photo to it by hand: the photo of a phone taken on the
+// outing, a picture that lost the name of its camera
+function dayLists(photo, day) {
+  const box = el("div", { class: "attach" });
+  const draw = (lists) => box.replaceChildren(...(lists.length
+    ? [el("p", { class: "mono", text: (photo.match === "detached" ? "Détachée à la main de sa liste. " : "")
+          + "Listes eBird de ce jour-là : rattacher la photo à celle de la sortie où elle a été prise." }),
+       ...lists.map((list) => el("div", { class: "actions" },
+         el("span", { class: "mono", text: `${list.sid} · ${(list.start || "").slice(11, 16) || "sans heure"}`
+           + `${list.duration ? `, ${list.duration} min` : ""} · ${list.location}` }),
+         el("button", { class: "pill", type: "button", text: "Rattacher",
+                        title: "Rattacher la photo (toute la séquence) à cette liste : son lieu devient celui de la liste, "
+                          + "sauf si la photo porte sa propre position ; la correspondance automatique ne la détachera pas",
+                        onclick: () => attachTo(photo, list.sid, box) })))]
+    : [el("p", { class: "mono", text: "Aucune liste eBird ce jour-là." })]));
+  if (state.days[day]) draw(state.days[day]);
+  else {
+    fetch("/api/day?date=" + encodeURIComponent(day)).then((reply) => reply.json()).then((lists) => {
+      if (!Array.isArray(lists)) return;           // (a server from before this)
+      state.days[day] = lists;
+      draw(lists);
+    }).catch(() => {});
+  }
+  return box;
+}
+
+async function attachTo(photo, sid, box) {
+  const index = state.items.indexOf(photo);
+  const reply = await post("/api/attach", { name: photo.name, sid }).catch((err) => ({ error: String(err) }));
+  if (reply.error || !reply.photo) {
+    box.append(el("p", { class: "mono", text: reply.error === "refusé"
+      ? "Ce serveur date d'avant cette fonction : relancez `patchdoc gui`." : reply.error || "Ça n'a pas marché." }));
+    return;
+  }
+  Object.assign(photo, reply.photo);
+  refresh(index);
+  if (state.current === index) $("viewerInfo").replaceChildren(...info(photo));
+}
+
 // the headings of the panel of a photo, each with a small drawing
 const ICONS = {
   people: '<circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17.5" cy="9" r="2.4"/><path d="M17 14.3c2.3.5 4 2.6 4 5.2"/>',
@@ -1386,7 +1427,8 @@ function info(photo) {
       el("span", { class: "chip", text: word, onclick: () => setFilter({ q: word }) }))));
   }
 
-  if (photo.location || photo.checklist) {
+  const day = (photo.local || photo.taken || "").slice(0, 10);
+  if (photo.location || photo.checklist || day) {
     out.push(heading("pin", "Où"));
     if (photo.location) {
       out.push(el("div", { class: "chips" }, el("span", { class: "chip", text: photo.location,
@@ -1400,7 +1442,7 @@ function info(photo) {
     }
     if (photo.checklist) {
       const how = { inside: "photo prise pendant la liste", near: "photo prise à moins d'une heure de la liste",
-                    other: "liste choisie par Claude parmi celles du jour" }[photo.match] || "";
+                    other: "liste choisie par Claude parmi celles du jour", manual: "rattachée à la main" }[photo.match] || "";
       const box = el("div", {});
       // the checklist on eBird: its address, written out, is the link
       const url = "https://ebird.org/checklist/" + encodeURIComponent(photo.checklist);
@@ -1411,8 +1453,14 @@ function info(photo) {
         el("div", { class: "actions" },
           el("button", { class: "pill", type: "button", text: "Ses espèces", onclick: () => listSpecies(photo, box) }),
           el("button", { class: "pill", type: "button", text: "Toutes ses photos",
-                         onclick: () => setFilter({ checklist: photo.checklist }) })),
+                         onclick: () => setFilter({ checklist: photo.checklist }) }),
+          el("button", { class: "pill", type: "button", text: "Détacher de cette liste",
+                         title: "La photo n'a pas été prise pendant cette liste : elle n'y sera plus rattachée, "
+                           + "et la correspondance automatique ne l'y remettra pas",
+                         onclick: () => attachTo(photo, null, box) })),
         box);
+    } else if (day) {
+      out.push(dayLists(photo, day));
     }
   }
 

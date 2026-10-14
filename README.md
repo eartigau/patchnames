@@ -367,6 +367,15 @@ prise pendant une liste (son heure telle quelle) à moins de 5 km de son
 lieu, y est rattachée quand même : c'est la sortie, vous ou la famille avec
 vous. Elle garde son heure et son lieu à elle.
 
+**Rattacher à la main.** Dans le panneau d'une photo sans liste, « Où »
+montre les listes eBird de ce jour-là, chacune avec un bouton « Rattacher » :
+pour la photo d'un cellulaire prise pendant la sortie, ou un JPEG qui a
+perdu le nom de son appareil. Une photo rattachée a « Détacher de cette
+liste », pour une photo rattachée à tort. Ce qui est fait à la main reste :
+ni `--rematch` ni une nouvelle description ne le défait, la liste et son
+lieu sont écrits dans les fichiers, et « Afficher : les photos rattachées
+à la main à une liste » les retrouve toutes.
+
 `patchdoc index --rematch` applique cette règle à la base : il lit d'abord,
 dans leurs fichiers, l'appareil des séquences JPEG que la base ne connaît
 que par leur nom (celles dont le fichier est hors d'atteinte sont laissées

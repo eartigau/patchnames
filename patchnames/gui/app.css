@@ -1061,6 +1061,18 @@ button:focus-visible,
   display: none;
 }
 
+/* the checklists of the day, to tie the photo to one by hand */
+.viewer-info .attach .actions {
+  align-items: center;
+  flex-wrap: nowrap;
+  margin-top: 4px;
+}
+
+.viewer-info .attach .actions .mono {
+  flex: 1;
+  min-width: 0;
+}
+
 /* the two arrows that turn the photo on screen */
 .viewer-info .turns {
   align-items: center;

@@ -9,6 +9,8 @@ The page (gui/index.html, app.js) asks for:
     /api/places?...          their places, for the map
     /api/sequence?seq=       the frames of a sequence
     /api/checklist?sid=      an eBird checklist and its species
+    /api/day?date=           the eBird checklists of a day
+    /api/attach              (POST) tie a sequence to a checklist by hand, or untie it
     /thumb/NAME /preview/NAME   the images of a photo
     /eye/NAME                the eye of the bird of a photo at full resolution
     /api/reveal, /api/open   (POST) show a photo in the Finder, open it
@@ -1035,6 +1037,10 @@ class Handler(BaseHTTPRequestHandler):
                 db = _db()
                 self._send(200, photoindex.sequence(db, args.get('seq', '')))
                 db.close()
+            elif url.path == '/api/day':
+                db = _db()
+                self._send(200, photoindex.checklists_of(db, args.get('date', '')[:10]))
+                db.close()
             elif url.path == '/api/checklist':
                 db = _db()
                 self._send(200, photoindex.checklist(db, args.get('sid', '')) or {})
@@ -1068,7 +1074,7 @@ class Handler(BaseHTTPRequestHandler):
                 '/api/batch/stop', '/api/face', '/api/pano', '/api/rotate', '/api/archive/use',
                 '/api/archive/look', '/api/sync',
                 '/api/sync/stop', '/api/species', '/api/inbox', '/api/inbox/act',
-                '/api/inbox/stop', '/api/backup', '/api/quit'):
+                '/api/inbox/stop', '/api/backup', '/api/quit', '/api/attach'):
             self._send(403, {'error': 'refusé'})
             return
         try:
@@ -1103,6 +1109,23 @@ class Handler(BaseHTTPRequestHandler):
                         self._send(200, dict(_copies(), error='Une copie est déjà en cours.'))
                         return
                 self._send(200, _copies())
+                return
+            if self.path == '/api/attach':
+                # a sequence tied to a checklist by hand, or untied
+                from .doc import attach
+                db = _db()
+                row = db.execute('SELECT seq FROM photos WHERE name = ?',
+                                 (str(body.get('name')),)).fetchone()
+                db.close()
+                try:
+                    if row is None:
+                        raise RuntimeError('photo inconnue')
+                    fixed = attach(row['seq'], str(body['sid']) if body.get('sid') else None)
+                except RuntimeError as exc:
+                    self._send(200, {'error': str(exc)})
+                    return
+                _wake.set()         # (the files are to say it)
+                self._send(200, {'photo': _public(fixed)})
                 return
             if self.path == '/api/quit':
                 self._send(200, {'ok': True})

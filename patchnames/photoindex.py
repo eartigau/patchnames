@@ -57,7 +57,10 @@ COLUMNS = ('name', 'path', 'stem', 'ext',
            'faces',            # how many faces were found in it; NULL if nobody looked
            'note',             # what Claude says of the photo against the checklist
            'checklist',        # eBird submission ID
-           'match',            # 'inside' or 'near' the hours of the checklist
+           'match',            # 'inside' or 'near' the hours of the checklist, 'other' (Claude's
+                               #   choice among those of the day), 'gps' (no checklist, a place
+                               #   from the position of the photo), 'manual' (tied by hand),
+                               #   'detached' (untied by hand)
            'on_checklist',     # 1: every species named is on the checklist, 0: one is not
            'location', 'county', 'state', 'country', 'lat', 'lon',
            'own_position',     # 1 when lat and lon are the position the photo carries itself
@@ -549,6 +552,8 @@ def _where(q='', species='', listed=False, place='', region='', year='', since='
         where.append('p.described IS NULL')
     elif flag == 'nolist':
         where.append('p.bird = 1 AND p.checklist IS NULL')
+    elif flag == 'manual':
+        where.append("p.match = 'manual'")
     if checklist:
         where.append('p.checklist = ?')
         args.append(checklist)
@@ -639,6 +644,13 @@ def sequence(db, seq):
         'SELECT name, path, taken, rep, eye, clear, level, sharp, best, eye_x, eye_y, turned '
         'FROM photos '
         'WHERE seq = ? ORDER BY taken, name', (seq,))]
+
+
+def checklists_of(db, day):
+    """the eBird checklists of a day ('YYYY-MM-DD'), in the order of their start"""
+    return [dict(row) for row in db.execute(
+        'SELECT sid, start, duration, location, county, state, country FROM checklists '
+        'WHERE day = ? ORDER BY COALESCE(start, day)', (day,))]
 
 
 def checklist(db, sid):
