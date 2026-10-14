@@ -1918,6 +1918,9 @@ def rematch():
             (kept['checklist'], kept['match'], kept['clock_offset'], on_list, kept['location'],
              kept['county'], kept['state'], kept['country'], kept['lat'], kept['lon'],
              photoindex.place_text(kept), f"{kept['clock_offset']:+g} hours", row['seq']))
+        if row['checklist'] and kept['checklist'] != row['checklist']:
+            # (what Claude said of the photo against a checklist it is no longer tied to)
+            db.execute("UPDATE photos SET note = '' WHERE seq = ?", (row['seq'],))
         if (kept['checklist'], kept['location']) != (row['checklist'], row['location'] or ''):
             # (what the files say of their checklist and their place is to be written again)
             db.execute("UPDATE photos SET written = 'pending' WHERE seq = ? AND written IS NOT NULL "
