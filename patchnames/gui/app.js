@@ -1570,6 +1570,19 @@ async function start() {
       $("mapCard").hidden = false;
     }
   } catch (err) { /* private mode */ }
+  // the server is stopped from the page: started from the Dock, it has no terminal
+  $("quit").addEventListener("click", async (event) => {
+    event.preventDefault();
+    const link = event.currentTarget;
+    if (Date.now() - (link.armed || 0) > 8000) {
+      link.armed = Date.now();
+      link.textContent = "Confirmer : arrêter patchdoc (ce que Claude regarde en ce moment est abandonné)";
+      return;
+    }
+    const reply = await post("/api/quit").catch(() => ({}));
+    link.replaceWith(reply.ok ? "patchdoc est arrêté : l'icône du Dock, ou `patchdoc gui`, le relance."
+      : "Ce serveur date d'avant cette fonction : arrêtez-le avec Ctrl-C dans son terminal.");
+  });
   $("batchGo").addEventListener("click", batchGo);
   $("batchAll").addEventListener("click", batchAll);
   $("batchStop").addEventListener("click", async () => { await post("/api/batch/stop"); watchBatch(); });

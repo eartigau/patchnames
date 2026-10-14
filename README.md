@@ -371,6 +371,21 @@ le lieu dans la base. Pour les photos de cellulaire déjà indexées avec le
 lieu de leur liste : `patchdoc index --exif DOSSIER --force`, puis « Écrire
 dans les fichiers ».
 
+### L'icône du Dock
+
+`patchdoc app` fait l'application `patchdoc.app` dans `~/Applications` et
+l'ajoute au Dock (qui redémarre pour la montrer ; `--sans-dock` pour ne pas
+y toucher). Un clic sur l'icône démarre la page de recherche si elle ne
+tourne pas, puis l'ouvre dans le navigateur ; un second clic ne fait que
+l'ouvrir. Ce que dit le serveur va dans `~/Library/Logs/patchdoc.log`.
+
+Lancée du Dock, la page n'a pas de terminal où faire Ctrl-C : le lien
+« Arrêter patchdoc », au bas de la page, l'arrête (ce que Claude regarde à
+ce moment est abandonné ; un lot de toute l'archive reprend au démarrage
+suivant). L'application garde le `PATH` du terminal où `patchdoc app` a été
+lancé, pour trouver exiftool, claude, gh et rsync comme lui : relancez
+`patchdoc app` si l'un d'eux, ou patchdoc, change de place.
+
 ### Sauvegarder la base sur GitHub
 
 La base de recherche (`photos.sqlite` : chaque description, note, lieu, nom

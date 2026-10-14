@@ -2506,7 +2506,17 @@ def main():
     p_backup.add_argument('--restaurer', metavar='FICHIER', default=None,
                           help='Relire une sauvegarde téléchargée, dans photos.restauree.sqlite.')
 
+    p_app = sub.add_parser(
+        'app', help="Faire l'application patchdoc et la mettre dans le Dock : un clic démarre "
+                    "la page de recherche et l'ouvre.")
+    p_app.add_argument('--sans-dock', action='store_true',
+                       help="Faire l'application dans ~/Applications sans toucher au Dock.")
+
     args = parser.parse_args()
+    if args.cmd == 'app':
+        from . import macapp
+        macapp.install(dock=not args.sans_dock)
+        return
     if args.cmd == 'sauvegarde':
         from . import backup
         backup.main(set_it=args.password, back=args.restaurer)

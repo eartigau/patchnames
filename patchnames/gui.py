@@ -33,6 +33,8 @@ The page (gui/index.html, app.js) asks for:
     /api/faces?name=         the faces of a photo, looked for if nobody did
     /api/face                (POST) who a face is
     /api/pano                (POST) stitch a sequence into a panorama
+    /api/quit                (POST) stop this server (started from the Dock, it
+                             has no terminal to press Ctrl-C in)
     /api/rotate              (POST) turn a photo a quarter turn: the Orientation
                              of its file is rewritten, its pictures follow
 
@@ -1066,7 +1068,7 @@ class Handler(BaseHTTPRequestHandler):
                 '/api/batch/stop', '/api/face', '/api/pano', '/api/rotate', '/api/archive/use',
                 '/api/archive/look', '/api/sync',
                 '/api/sync/stop', '/api/species', '/api/inbox', '/api/inbox/act',
-                '/api/inbox/stop', '/api/backup'):
+                '/api/inbox/stop', '/api/backup', '/api/quit'):
             self._send(403, {'error': 'refusé'})
             return
         try:
@@ -1101,6 +1103,11 @@ class Handler(BaseHTTPRequestHandler):
                         self._send(200, dict(_copies(), error='Une copie est déjà en cours.'))
                         return
                 self._send(200, _copies())
+                return
+            if self.path == '/api/quit':
+                self._send(200, {'ok': True})
+                # (from another thread: this one is inside the loop it ends)
+                threading.Thread(target=self.server.shutdown, daemon=True).start()
                 return
             if self.path == '/api/backup':
                 with _lock:
