@@ -1061,6 +1061,20 @@ button:focus-visible,
   display: none;
 }
 
+/* the two arrows that turn the photo on screen */
+.viewer-info .turns {
+  align-items: center;
+  margin: 2px 0 12px;
+}
+
+.viewer-info .turns .mono {
+  flex: 1 1 100%;
+}
+
+.viewer-info .turns .mono:empty {
+  display: none;
+}
+
 /* a note out of five: as many dots lit */
 .rating {
   display: inline-flex;

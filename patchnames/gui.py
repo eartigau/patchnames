@@ -33,6 +33,8 @@ The page (gui/index.html, app.js) asks for:
     /api/faces?name=         the faces of a photo, looked for if nobody did
     /api/face                (POST) who a face is
     /api/pano                (POST) stitch a sequence into a panorama
+    /api/rotate              (POST) turn a photo a quarter turn: the Orientation
+                             of its file is rewritten, its pictures follow
 
 Thumbnails and previews come from the index folder, a local store that makes
 browsing fast and needs no drive; one that is missing is made from the photo
@@ -530,6 +532,14 @@ def _fill(stop):
     db.close()
     todo = [row['name'] for row in rows if not os.path.isfile(photoindex.thumb_path(row['name']))]
     _store.update(total=len(rows), have=len(rows) - len(todo), filling=bool(todo))
+    # first, the pictures kept on their side are made upright (doc.straighten)
+    from .doc import straighten
+    while not stop.is_set() and not _archive()['mounted']:
+        stop.wait(60)
+    try:
+        straighten(stop, lambda counts: _store.update(straight=counts))
+    except Exception as exc:
+        _store.update(straight={'error': str(exc)})
 
     def ready():
         """wait for the archive, and for Claude's sequences to be read: they
@@ -1053,7 +1063,7 @@ class Handler(BaseHTTPRequestHandler):
         # a header no other site can send without asking first, and never gets
         if self.headers.get('X-Patchdoc') != '1' or self.path not in (
                 '/api/reveal', '/api/open', '/api/describe', '/api/write', '/api/batch',
-                '/api/batch/stop', '/api/face', '/api/pano', '/api/archive/use',
+                '/api/batch/stop', '/api/face', '/api/pano', '/api/rotate', '/api/archive/use',
                 '/api/archive/look', '/api/sync',
                 '/api/sync/stop', '/api/species', '/api/inbox', '/api/inbox/act',
                 '/api/inbox/stop', '/api/backup'):
@@ -1137,6 +1147,36 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 _wake.set()         # (the files of the sequence are to be written again)
                 self._send(200, {'photo': _public(fixed)})
+                return
+            if self.path == '/api/rotate':
+                # a quarter turn of the photo on screen, or of its whole sequence
+                from .doc import turn
+                db = _db()
+                row = db.execute('SELECT seq FROM photos WHERE name = ?',
+                                 (str(body.get('name')),)).fetchone()
+                db.close()
+                if row is None:
+                    self._send(200, {'error': 'photo inconnue'})
+                    return
+                if not _claim(row['seq']):
+                    self._send(200, {'error': "Les fichiers de cette séquence sont en train d'être "
+                                              'écrits : réessayez dans un instant.'})
+                    return
+                try:
+                    done = turn(str(body.get('name')), str(body.get('way')), bool(body.get('all')))
+                except RuntimeError as exc:
+                    self._send(200, {'error': f'La photo n\'a pas été tournée : {exc}.'})
+                    return
+                finally:
+                    _release(row['seq'])
+                _wake.set()         # (the place of an eye is to be written again)
+                db = _db()
+                shown = db.execute('SELECT * FROM photos WHERE seq = (SELECT seq FROM photos '
+                                   'WHERE name = ?) AND rep = 1', (done[0],)).fetchone()
+                frames = photoindex.sequence(db, shown['seq']) if shown else []
+                db.close()
+                self._send(200, {'turned': done, 'photo': _public(dict(shown)) if shown else None,
+                                 'frames': frames})
                 return
             if self.path == '/api/pano':
                 from .doc import panorama_of

@@ -529,6 +529,22 @@ l'appel à Claude le demandent.
   index`. La ligne sous « Regarder » dit combien de photos de la base n'y
   sont pas, et combien d'images de ses autres dossiers la base ne montre
   pas (`patchdoc index --exif DOSSIER` pour celles-là).
+- **L'orientation.** Une photo est montrée comme son fichier dit de la voir
+  (le mot-clé EXIF `Orientation`), qu'elle soit JPEG, NEF, DNG ou HEIC :
+  l'aperçu contenu dans un NEF ou un DNG ne le dit pas lui-même, c'est le
+  fichier qui le dit. Les vignettes et les aperçus faits avant le 13 octobre
+  2026 ne suivaient cette étiquette que pour les JPEG : au démarrage de la
+  page, ceux des photos prises l'appareil sur le côté sont refaits debout en
+  arrière-plan, les plus récents d'abord, et la position de l'œil et des
+  visages tourne avec eux.
+- **Tourner une photo.** En haut du panneau d'une photo, « ↺ vers la
+  gauche » et « ↻ vers la droite » tournent la vue affichée d'un quart de
+  tour (Maj + clic : toutes les vues de la séquence), pour celles dont le
+  fichier ne dit rien ou dit faux (un vieil appareil sans capteur
+  d'orientation, un scan). Seule l'étiquette `Orientation` de l'en-tête est
+  récrite, avec exiftool ; l'image elle-même ne l'est pas, donc rien ne se
+  perd et la rotation se défait par la flèche inverse. Pour un HEIC, la
+  rotation de son conteneur, que macOS suit, est récrite avec elle.
 - **Le sablier.** Dans la visionneuse, une vue dont l'aperçu n'est pas
   encore gardé est lue dans la photo elle-même, ce qui prend un moment sur
   un disque réseau : un sablier le dit, sur la vue d'avant assombrie.

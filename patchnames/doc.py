@@ -76,6 +76,7 @@ from . import pano
 from . import photoindex
 from . import remote
 from .keywords import (IMAGE_PATTERNS, UNSURE, _groups, _image, _pictures, _tags, _when,
+                       quarters, turned, turned_box, upright,
                        instructions_path, write_template)
 
 #: the main subject of a photo, one of
@@ -117,7 +118,7 @@ NOTES = (('eye', 'oeil_net', 'Œil net', 'œil net'), ('clear', 'degage', 'Déga
 
 #: what exiftool is asked of each photo
 FIELDS = ['-DateTimeOriginal', '-OffsetTimeOriginal', '-Model', '-LensModel', '-LensID',
-          '-LensInfo', '-Lens', '-FocalLength#', '-GPSLatitude#', '-GPSLongitude#',
+          '-LensInfo', '-Lens', '-FocalLength#', '-Orientation#', '-GPSLatitude#', '-GPSLongitude#',
           '-GPSAreaInformation', '-AFAreaXPosition', '-AFAreaYPosition', '-AFImageWidth',
           '-AFImageHeight', '-XMP-dc:Title', '-XMP-dc:Description', '-XMP-dc:Subject',
           '-XMP-lr:HierarchicalSubject', '-XMP-iptcExt:Event', '-XMP-iptcExt:PersonInImage',
@@ -289,10 +290,11 @@ def read_frame(path, found=None):
     """the tags of a photo and its picture at full size, (dict, PIL image);
     found: what read_frames brought for it, if it was asked with others"""
     import io
-    from PIL import Image, ImageOps
+    from PIL import Image
     row, raw = found if found else read_frames([path]).get(path, ({}, None))
     try:
-        img = ImageOps.exif_transpose(Image.open(io.BytesIO(raw))).convert('RGB')
+        # (the picture inside a raw file is seen as the file says: see _image)
+        img = upright(Image.open(io.BytesIO(raw)), row.get('Orientation')).convert('RGB')
     except Exception:
         # not a raw file, or one without a full-size picture inside
         img = _image(path, big=True)
@@ -733,8 +735,11 @@ def _focus(size, row):
     area; its centre without it)"""
     width, height = size
     try:
-        return (float(row['AFAreaXPosition']) / float(row['AFImageWidth']) * width,
-                float(row['AFAreaYPosition']) / float(row['AFImageHeight']) * height)
+        # (the camera gives it on the sensor: it turns with the picture)
+        x, y = turned(float(row['AFAreaXPosition']) / float(row['AFImageWidth']),
+                      float(row['AFAreaYPosition']) / float(row['AFImageHeight']),
+                      quarters(row.get('Orientation')))
+        return x * width, y * height
     except (KeyError, TypeError, ValueError, ZeroDivisionError):
         return width / 2, height / 2
 
@@ -2184,6 +2189,151 @@ def write_sequence(seq_id, progress=None, chunk=6):
             progress(done, len(todo))
     db.close()
     return done
+
+
+#: the Orientation of a file once its picture is turned a quarter turn
+#:  clockwise; anticlockwise is the same table read the other way
+CLOCKWISE = {1: 6, 6: 3, 3: 8, 8: 1, 2: 7, 7: 4, 4: 5, 5: 2}
+#: the rotation a HEIC file keeps beside its Orientation (quarter turns
+#:  anticlockwise), which is what macOS follows
+HEIC_ROTATION = {1: 0, 8: 1, 3: 2, 6: 3}
+
+
+def _turn_kept(db, name, full, quarter):
+    """make again, from its file, the pictures the index keeps of a photo
+    whose file now says another way up, and turn with them (`quarter`
+    quarter turns clockwise) what is placed on them: the eye of the bird and
+    the faces. The page is told to ask for the pictures again."""
+    big = os.path.isfile(photoindex.preview_path(name))
+    photoindex.save_images(_image(full, big=big), name, preview=big)
+    if os.path.isfile(photoindex.eye_path(name)):
+        os.remove(photoindex.eye_path(name))        # (made again when it is asked for)
+    row = db.execute('SELECT eye_x, eye_y, turned FROM photos WHERE name = ?', (name,)).fetchone()
+    eye = (row['eye_x'], row['eye_y'])
+    if quarter % 4 and None not in eye:
+        eye = tuple(round(value, 4) for value in turned(eye[0], eye[1], quarter))
+        # (the place of the eye written in the file is to be written again)
+        db.execute("UPDATE photos SET written = 'pending' WHERE name = ? AND written IS NOT NULL",
+                   (name,))
+    db.execute('UPDATE photos SET turned = ?, upright = 1, eye_x = ?, eye_y = ? WHERE name = ?',
+               ((row['turned'] or 0) + 1, eye[0], eye[1], name))
+    if quarter % 4:
+        for face in db.execute('SELECT id, x, y, w, h FROM faces WHERE photo = ?', (name,)).fetchall():
+            db.execute('UPDATE faces SET x = ?, y = ?, w = ?, h = ? WHERE id = ?',
+                       turned_box(face['x'], face['y'], face['w'], face['h'], quarter) + (face['id'],))
+    db.commit()
+
+
+def straighten(stop=None, tell=None, chunk=100):
+    """Make upright the pictures the index keeps of photos whose file says
+    they are to be turned. Until 2026-10-13 that was only followed for JPEG
+    files: a NEF, a DNG or a HEIC taken with the camera on its side lay on
+    its side in the page. The Orientation of each file whose thumbnail dates
+    from before is read (the newest first, `chunk` files to a run of
+    exiftool); the pictures of those that are to be turned are made again,
+    and the eye and the faces placed on them turn with them. A run that is
+    stopped goes on from there the next time; photos out of reach wait.
+    tell(counts) as it goes. Returns {'checked', 'turned', 'left'}."""
+    db = photoindex.connect()
+    try:
+        since = photoindex.meta('upright_since')
+        if not since:
+            since = str(time.time())
+            photoindex.set_meta(db, 'upright_since', since)
+        since = float(since)
+        # (a JPEG was always seen as it says)
+        db.execute("UPDATE photos SET upright = 1 WHERE upright IS NULL AND ext IN ('jpg', 'jpeg')")
+        db.commit()
+        rows = db.execute('SELECT name, path FROM photos WHERE upright IS NULL '
+                          'ORDER BY COALESCE(local, taken) DESC').fetchall()
+        fine, check = [], []
+        for row in rows:
+            thumb = photoindex.thumb_path(row['name'])
+            old = os.path.isfile(thumb) and os.path.getmtime(thumb) < since
+            (check if old else fine).append(row)
+        # (no picture kept, or one made since: nothing to make again)
+        db.executemany('UPDATE photos SET upright = 1 WHERE name = ?', [(row['name'],) for row in fine])
+        db.commit()
+        out = {'checked': 0, 'turned': 0, 'left': len(check)}
+        for start in range(0, len(check), chunk):
+            if stop is not None and stop.is_set():
+                break
+            fulls = {photoindex.resolve(row['path']): row['name'] for row in check[start:start + chunk]}
+            fulls.pop(None, None)
+            said = {row['SourceFile']: row.get('Orientation')
+                    for row in remote.rows(['-fast2', '-Orientation#'], list(fulls))} if fulls else {}
+            for full, name in fulls.items():
+                if full not in said:
+                    continue        # (not read this time)
+                try:
+                    orientation = int(said[full] or 1)
+                except (TypeError, ValueError):
+                    orientation = 1
+                if orientation == 1:
+                    db.execute('UPDATE photos SET upright = 1 WHERE name = ?', (name,))
+                else:
+                    try:
+                        _turn_kept(db, name, full, quarters(orientation))
+                    except Exception:
+                        continue    # (a picture that cannot be made now waits)
+                    out['turned'] += 1
+                out['checked'] += 1
+                out['left'] -= 1
+            db.commit()
+            if tell:
+                tell(dict(out))
+        return out
+    finally:
+        db.close()
+
+
+def turn(name, way, whole=False):
+    """Turn a photo a quarter turn, clockwise (way 'cw') or anticlockwise
+    ('ccw'), or every frame of its sequence (whole). Nothing of the picture
+    itself is rewritten: the Orientation of the file is, which says how it
+    is to be seen (and, for a HEIC, the rotation of its container, which
+    macOS follows). The pictures the index keeps, the eye and the faces
+    follow. Returns the names of the photos turned; raises RuntimeError."""
+    if way not in ('cw', 'ccw'):
+        raise RuntimeError('sens inconnu')
+    table = CLOCKWISE if way == 'cw' else {new: old for old, new in CLOCKWISE.items()}
+    db = photoindex.connect()
+    try:
+        row = db.execute('SELECT seq FROM photos WHERE name = ?', (name,)).fetchone()
+        if row is None:
+            raise RuntimeError('photo inconnue')
+        frames = [frame for frame in photoindex.sequence(db, row['seq'])
+                  if whole or frame['name'] == name]
+        fulls = {photoindex.resolve(frame['path']): frame['name'] for frame in frames}
+        if None in fulls or not fulls:
+            raise RuntimeError("le fichier est hors d'atteinte (le disque d'archive est-il monté ?)")
+        now = {found['SourceFile']: found.get('Orientation')
+               for found in remote.rows(['-fast2', '-Orientation#'], list(fulls))}
+        head = ['-q', '-m', '-n'] + ([] if _cfg().get('gui_backup') else ['-overwrite_original'])
+        wanted, blocks = {}, {}
+        for full in fulls:
+            try:
+                wanted[full] = table[int(now.get(full) or 1)]
+            except (KeyError, TypeError, ValueError):
+                wanted[full] = table[1]
+            args = [f'-Orientation={wanted[full]}']
+            if full.lower().endswith('.heic') and wanted[full] in HEIC_ROTATION:
+                args.append(f'-Rotation={HEIC_ROTATION[wanted[full]]}')
+            blocks.setdefault(tuple(args), []).append(full)
+        code, _, err, _ = remote.run_many([(head + list(args), files) for args, files in blocks.items()])
+        after = {found['SourceFile']: found.get('Orientation')
+                 for found in remote.rows(['-fast2', '-Orientation#'], list(fulls))}
+        done = []
+        for full, frame in fulls.items():
+            if str(after.get(full)) != str(wanted[full]):
+                continue
+            _turn_kept(db, frame, full, 1 if way == 'cw' else 3)
+            done.append(frame)
+        if not done:
+            raise RuntimeError(f"l'orientation n'a pas pu être écrite : {err.strip()[:200] or code}")
+        return done
+    finally:
+        db.close()
 
 
 def pending_writes():

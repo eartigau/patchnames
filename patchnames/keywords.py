@@ -110,7 +110,7 @@ def _exif(files):
     out = subprocess.run(['exiftool', '-j', '-q', '-DateTimeOriginal', '-LensModel',
                           '-LensID', '-LensInfo', '-Lens', '-XMP-dc:Title',
                           '-AFAreaXPosition', '-AFAreaYPosition', '-AFImageWidth',
-                          '-AFImageHeight'] + files,
+                          '-AFImageHeight', '-Orientation#'] + files,
                          capture_output=True, text=True).stdout
     rows = json.loads(out) if out.strip() else []
     return {os.path.basename(row['SourceFile']): row for row in rows}
@@ -146,24 +146,69 @@ def _groups(files, rows, gap):
     return groups + [[name] for name in undated]
 
 
+#: the quarter turns clockwise the Orientation of a file asks of its picture
+QUARTERS = {1: 0, 6: 1, 3: 2, 8: 3}
+
+
+def quarters(orientation):
+    """how many quarter turns clockwise a picture needs to be upright, from
+    the Orientation of its file (none when the file does not say)"""
+    try:
+        return QUARTERS.get(int(orientation), 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def turned(x, y, quarter):
+    """a point of a picture (fractions from its left and from its top) once
+    the picture is turned that many quarter turns clockwise"""
+    for _ in range(quarter % 4):
+        x, y = 1 - y, x
+    return x, y
+
+
+def turned_box(x, y, w, h, quarter):
+    """the same for a box (its left, its top, its width, its height)"""
+    (a, b), (c, d) = turned(x, y, quarter), turned(x + w, y + h, quarter)
+    return min(a, c), min(b, d), abs(c - a), abs(d - b)
+
+
+def upright(img, orientation):
+    """a picture as the Orientation of its file asks to see it"""
+    from PIL import Image
+    how = {2: Image.Transpose.FLIP_LEFT_RIGHT, 3: Image.Transpose.ROTATE_180,
+           4: Image.Transpose.FLIP_TOP_BOTTOM, 5: Image.Transpose.TRANSPOSE,
+           6: Image.Transpose.ROTATE_270, 7: Image.Transpose.TRANSVERSE,
+           8: Image.Transpose.ROTATE_90}
+    try:
+        return img.transpose(how[int(orientation)])
+    except (KeyError, TypeError, ValueError):
+        return img
+
+
 def _image(path, big):
-    """the embedded preview of a raw (or the image itself), upright"""
+    """the embedded preview of a raw (or the image itself), upright: as the
+    Orientation of the file says. The picture inside a NEF or a DNG does not
+    say it itself: the file does."""
+    import base64
     from PIL import Image, ImageOps
     if path.lower().endswith(('.jpg', '.jpeg')):
         return ImageOps.exif_transpose(Image.open(path)).convert('RGB')
-    tags = ('-JpgFromRaw', '-PreviewImage') if big else ('-PreviewImage', '-JpgFromRaw')
-    for tag in tags + ('-ThumbnailImage',):
+    tags = ('JpgFromRaw', 'PreviewImage') if big else ('PreviewImage', 'JpgFromRaw')
+    for tag in tags + ('ThumbnailImage',):
         # (on the server of the archive when it has exiftool: see remote.py)
         from . import remote
-        raw = remote.run(['-b', tag], [path])[1]
+        row = (remote.rows(['-b', '-' + tag, '-Orientation#'], [path]) or [{}])[0]
         try:
-            return ImageOps.exif_transpose(Image.open(io.BytesIO(raw))).convert('RGB')
+            raw = base64.b64decode(row[tag][len('base64:'):])
+            return upright(Image.open(io.BytesIO(raw)), row.get('Orientation')).convert('RGB')
         except Exception:
             continue
-    # HEIC and others: let macOS convert it
+    # HEIC and others: let macOS convert it (its JPEG says how the file is
+    #   to be seen, the picture itself is not turned)
     out = os.path.join(tempfile.mkdtemp(), 'frame.jpg')
     subprocess.run(['sips', '-s', 'format', 'jpeg', path, '--out', out], capture_output=True)
-    return Image.open(out).convert('RGB')
+    return ImageOps.exif_transpose(Image.open(out)).convert('RGB')
 
 
 def _focus_crop(img, row):
@@ -171,8 +216,11 @@ def _focus_crop(img, row):
     (the centre of the frame when the file does not record it)"""
     width, height = img.size
     try:
-        cx = float(row['AFAreaXPosition']) / float(row['AFImageWidth']) * width
-        cy = float(row['AFAreaYPosition']) / float(row['AFImageHeight']) * height
+        # (the camera gives it on the sensor: it turns with the picture)
+        cx, cy = turned(float(row['AFAreaXPosition']) / float(row['AFImageWidth']),
+                        float(row['AFAreaYPosition']) / float(row['AFImageHeight']),
+                        quarters(row.get('Orientation')))
+        cx, cy = cx * width, cy * height
     except (KeyError, TypeError, ValueError, ZeroDivisionError):
         cx, cy = width / 2, height / 2
     half_w, half_h = min(700, width / 2), min(467, height / 2)

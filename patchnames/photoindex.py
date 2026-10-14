@@ -63,13 +63,17 @@ COLUMNS = ('name', 'path', 'stem', 'ext',
            'own_position',     # 1 when lat and lon are the position the photo carries itself
                                #   (a phone) and the place is named from it, not from the
                                #   checklist
+           'turned',          # how many times the pictures kept of the photo were made again
+                              #   another way up: the page then asks for them anew
+           'upright',         # 1 once those pictures, and what is placed on them (eye,
+                              #   faces), follow the Orientation of the file (doc.straighten)
            'described',       # when Claude described it, ISO; NULL if it never did
            'written',          # when that was written into the file; 'pending' while it waits
            'place_norm')
 
 TYPES = {'clock_offset': 'REAL', 'zone': 'REAL', 'focal': 'REAL', 'lat': 'REAL', 'lon': 'REAL',
          'bird': 'INTEGER', 'seq_n': 'INTEGER', 'rep': 'INTEGER', 'on_checklist': 'INTEGER',
-         'own_position': 'INTEGER',
+         'own_position': 'INTEGER', 'turned': 'INTEGER', 'upright': 'INTEGER',
          'eye':'INTEGER', 'clear': 'INTEGER', 'level': 'INTEGER', 'faces': 'INTEGER',
          'sharp': 'REAL', 'best': 'INTEGER', 'eye_x': 'REAL', 'eye_y': 'REAL'}
 
@@ -632,7 +636,8 @@ def facets(db):
 def sequence(db, seq):
     """the frames of a sequence, in order"""
     return [dict(row) for row in db.execute(
-        'SELECT name, path, taken, rep, eye, clear, level, sharp, best, eye_x, eye_y FROM photos '
+        'SELECT name, path, taken, rep, eye, clear, level, sharp, best, eye_x, eye_y, turned '
+        'FROM photos '
         'WHERE seq = ? ORDER BY taken, name', (seq,))]
 
 

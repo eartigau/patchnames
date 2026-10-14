@@ -12,7 +12,10 @@ const FIELDS = ["section", "place_of", "q", "species", "person", "place", "regio
                 "eye", "clear", "level", "flag", "sort"];
 const PAGE = 60;
 const state = { items: [], offset: 0, done: false, loading: false, token: 0, current: -1, checklist: "", total: 0,
-                frames: [] };
+                frames: [], versions: {} };
+// (state.versions: for the photos whose pictures were made again another way
+// up, how many times: their addresses change, past what the browser kept)
+const versioned = (rows) => { for (const row of rows || []) if (row && row.turned) state.versions[row.name] = row.turned; };
 // (state.names: the names offered for a face, those the photographer starts
 // with and those given so far)
 const NEW = "\u0000nouveau";      // the choice "ajouter un nom" of a face, "autre espèce" of a species
@@ -40,7 +43,8 @@ function el(tag, attrs, ...kids) {
 
 const split = (text) => (text || "").split("; ").map((word) => word.trim()).filter(Boolean);
 const number = (n) => Number(n || 0).toLocaleString("fr-CA");
-const image = (kind, name) => `/${kind}/${encodeURIComponent(name)}`;
+// (a picture made again another way up is asked for anew: see state.versions)
+const image = (kind, name) => `/${kind}/${encodeURIComponent(name)}` + (state.versions[name] ? "?v=" + state.versions[name] : "");
 const badge = (text, kind) => el("span", { class: "badge" + (kind ? " " + kind : ""), text });
 
 function region(photo) {
@@ -166,6 +170,7 @@ async function load(reset) {
     const data = await (await fetch("/api/search?" + params)).json();
     if (token !== state.token) return;          // a newer search took over
     if (data.error) throw new Error(data.error);
+    versioned(data.photos);
     for (const photo of data.photos) {
       state.items.push(photo);
       $("grid").append(tile(photo, state.items.length - 1));
@@ -366,6 +371,7 @@ async function watchBatch() {
     return;
   }
   if (status.total === undefined) return;        // a server from before this
+  versioned(status.finished.map((item) => item.photo));
   for (const item of status.finished) {
     const index = state.items.findIndex((photo) => photo.seq === item.seq);
     if (index >= 0 && item.photo) {
@@ -896,6 +902,7 @@ async function loadStrip(photo, index) {
   if (photo.seq_n <= 1) return;
   const frames = await (await fetch("/api/sequence?seq=" + encodeURIComponent(photo.seq))).json();
   if (state.current !== index || !Array.isArray(frames)) return;
+  versioned(frames);
   state.frames = frames;
   const rated = frames.some((frame) => frame.best);
   $("viewerStrip").replaceChildren(...frames.map((frame) => {
@@ -1206,6 +1213,33 @@ async function listSpecies(photo, box) {
         el("span", { text: sp.francais }), el("span", { class: "n", text: sp.count })))));
 }
 
+// turn the photo on screen a quarter turn (or every frame of its sequence):
+// the server rewrites the Orientation of the file, then makes its pictures again
+async function rotate(photo, way, whole, said) {
+  const index = state.items.indexOf(photo), name = state.shown || photo.name;
+  said.textContent = whole ? "Rotation de toutes les vues de la séquence…" : "Rotation…";
+  waiting(true);
+  let reply;
+  try {
+    reply = await post("/api/rotate", { name, way, all: whole });
+  } catch (err) {
+    reply = { error: String(err) };
+  }
+  if (reply.error || !reply.photo) {
+    waiting(false);
+    said.textContent = reply.error === "refusé"
+      ? "Ce serveur date d'avant cette fonction : arrêtez-le (Ctrl-C) et relancez `patchdoc gui`."
+      : reply.error || "La rotation a échoué.";
+    return;
+  }
+  versioned([reply.photo, ...reply.frames]);
+  Object.assign(photo, reply.photo);
+  refresh(index);
+  if (state.current !== index) return waiting(false);
+  await loadStrip(photo, index);
+  show(name);
+}
+
 // the headings of the panel of a photo, each with a small drawing
 const ICONS = {
   people: '<circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17.5" cy="9" r="2.4"/><path d="M17 14.3c2.3.5 4 2.6 4 5.2"/>',
@@ -1267,6 +1301,17 @@ function info(photo) {
   if (photo.seq_n > 1) badges.push(badge(photo.seq_n + " vues"));
   if (badges.length) out.push(el("div", { class: "badges" }, badges));
   out.push(el("div", { class: "badges", id: "frameNotes" }, noteBadges(photo)));
+  if (photo.reachable !== false) {
+    // two arrows that turn the photo on screen, and write how it is to be seen into its file
+    const said = el("span", { class: "mono" });
+    const arrow = (way, sign, where) => el("button", {
+      class: "pill turn", type: "button", text: `${sign} ${where}`,
+      title: `Tourner la vue affichée d'un quart de tour ${where} : l'orientation est écrite dans l'en-tête du fichier `
+        + "(le mot-clé EXIF Orientation) ; l'image elle-même n'est pas réécrite. "
+        + (photo.seq_n > 1 ? "Maj + clic : toutes les vues de la séquence." : ""),
+      onclick: (event) => rotate(photo, way, event.shiftKey && photo.seq_n > 1, said) });
+    out.push(el("div", { class: "actions turns" }, arrow("ccw", "↺", "vers la gauche"), arrow("cw", "↻", "vers la droite"), said));
+  }
   if (photo.description) out.push(el("p", { class: "lede", text: photo.description }));
   if (photo.note) out.push(el("p", { class: "note", text: "Par rapport à la liste : " + photo.note }));
   if (!photo.described) {
