@@ -450,8 +450,13 @@ dans les fichiers ».
 `patchdoc app` fait l'application `patchdoc.app` dans `~/Applications` et
 l'ajoute au Dock (qui redémarre pour la montrer ; `--sans-dock` pour ne pas
 y toucher). Un clic sur l'icône démarre la page de recherche si elle ne
-tourne pas, puis l'ouvre dans le navigateur ; un second clic ne fait que
-l'ouvrir. Ce que dit le serveur va dans `~/Library/Logs/patchdoc.log`.
+tourne pas, puis la montre dans le navigateur. Si un onglet de la page est
+déjà ouvert dans Safari ou un navigateur de la famille Chrome, c'est lui
+qui passe devant (rechargé si le serveur vient de démarrer), sans nouvel
+onglet ; macOS demande une fois la permission de piloter ce navigateur.
+Sinon, ou dans Firefox (qui ne laisse voir ses onglets à aucun script), la
+page s'ouvre dans le navigateur par défaut. Ce que dit le serveur va dans
+`~/Library/Logs/patchdoc.log`.
 
 Lancée du Dock, la page n'a pas de terminal où faire Ctrl-C : le lien
 « Arrêter patchdoc », au bas de la page, l'arrête (ce que Claude regarde à

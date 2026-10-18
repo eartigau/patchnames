@@ -4,9 +4,13 @@ An icon in the Dock for the search page: `patchdoc app`.
 It makes patchdoc.app in ~/Applications, a small AppleScript application
 whose only work is to run a shell script kept inside it: if the search page
 is not running, `patchdoc gui` is started in the background (what it says
-goes to ~/Library/Logs/patchdoc.log), then the page is opened in the
-browser. A second click on the icon only opens the page. The application
-is added to the Dock.
+goes to ~/Library/Logs/patchdoc.log), then the page is shown in the
+browser. A tab of the page already open in Safari, or in a browser of the
+Chrome family, is brought to the front (and loaded again when the server was
+just started) rather than a new one opened; macOS asks once to let patchdoc
+control that browser. Otherwise, or in another browser (Firefox lets no
+script see its tabs), the page is opened in the default browser. The
+application is added to the Dock.
 
 An application started from the Dock does not have the PATH of a terminal:
 the script takes the one of the terminal `patchdoc app` was run in, so that
@@ -37,11 +41,47 @@ end try
 '''
 LAUNCHER = '''#!/bin/sh
 # made by `patchdoc app`: start the search page of patchdoc if it is not
-# running, then open it in the browser
+# running, then show it in the browser
 export PATH=%(path)s
 # (what the page says reaches the log as it says it)
 export PYTHONUNBUFFERED=1
 %(config)sURL="http://127.0.0.1:%(port)s/"
+
+# a tab of the page already open in Safari or a browser of the Chrome family
+# comes to the front, loaded again when the server was just started ($1 =
+# again); otherwise the page is opened in the default browser
+show_page() {
+    found=$(osascript -l JavaScript - "$URL" "$1" 2>/dev/null <<'SCRIPT'
+function run(argv) {
+    const wanted = argv[0], again = argv[1] === 'again';
+    for (const name of ['Safari', 'Google Chrome', 'Brave Browser', 'Microsoft Edge', 'Chromium']) {
+        let app;
+        try { app = Application(name); if (!app.running()) continue; } catch (err) { continue; }
+        for (const win of app.windows()) {
+            let tabs = [];
+            try { tabs = win.tabs(); } catch (err) { continue; }
+            for (let k = 0; k < tabs.length; k++) {
+                let url = '';
+                try { url = tabs[k].url() || ''; } catch (err) { continue; }
+                if (!url.startsWith(wanted)) continue;
+                const safari = name === 'Safari';
+                if (safari) win.currentTab = tabs[k]; else win.activeTabIndex = k + 1;
+                if (again) { if (safari) tabs[k].url = url; else tabs[k].reload(); }
+                try { if (safari) win.miniaturized = false; else win.minimized = false; } catch (err) {}
+                win.index = 1;
+                app.activate();
+                return 'ok';
+            }
+        }
+    }
+    return '';
+}
+SCRIPT
+)
+    [ "$found" = ok ] || open "$URL"
+}
+
+again=""
 if ! curl -s -o /dev/null --max-time 2 "${URL}api/batch"; then
     mkdir -p "$HOME/Library/Logs"
     nohup %(patchdoc)s gui --no-browser >> "$HOME/Library/Logs/patchdoc.log" 2>&1 &
@@ -54,8 +94,9 @@ if ! curl -s -o /dev/null --max-time 2 "${URL}api/batch"; then
         fi
         sleep 0.5
     done
+    again=again
 fi
-open "$URL"
+show_page "$again"
 '''
 
 
@@ -171,7 +212,8 @@ def install(dock=True):
             shutil.rmtree(app)
         shutil.move(fresh, app)
     print(f"Application faite : {app}. Un clic démarre la page de recherche si elle ne tourne pas, "
-          'puis l\'ouvre ; ce que dit le serveur va dans ~/Library/Logs/patchdoc.log.')
+          "puis la montre (l'onglet déjà ouvert dans Safari ou Chrome, sinon un nouveau) ; ce que "
+          'dit le serveur va dans ~/Library/Logs/patchdoc.log.')
     if dock and in_dock(app):
         print('Elle est déjà dans le Dock.')
     elif dock:
