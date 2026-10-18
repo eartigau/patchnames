@@ -19,7 +19,9 @@ ebird/histogrammes, which the backup on GitHub takes with the index
 
 The species of a bar chart go by the French names of eBird (those of the
 account, fr_CA); the taxonomy of eBird, which needs no account, ties them to
-the Latin names the index has (kept in ebird/ too). A species counts with
+the Latin names the index has (kept in ebird/ too), and a Latin name eBird
+no longer uses (Bubulcus ibis, now Ardea ibis) is found by its French name,
+accents and the ligature œ aside. A species counts with
 its subspecies and forms (the most frequent of them), and one that eBird
 knows but the region never had is rare. A genus or a pair ('sp.', '/', a
 hybrid), a domestic form (few birders report one) and a Latin name eBird
@@ -65,8 +67,9 @@ TAXONOMY = 'https://api.ebird.org/v2/ref/taxonomy/ebird?fmt=csv&locale=fr_CA'
 #: how long the file Safari downloads is waited for, in seconds
 WAIT = 60
 
-#: the bar charts and the taxonomy read so far
-_charts, _taxa = {}, {}
+#: the bar charts and the taxonomy read so far (_french: {French name of
+#:  eBird, folded: the Latin name of its species})
+_charts, _taxa, _french = {}, {}, {}
 
 
 def stats_dir():
@@ -182,16 +185,23 @@ def taxonomy():
                 # (a subspecies or a form counts with its species)
                 species = ' '.join(latin.replace('(', ' ').split()[:2])
                 _taxa.setdefault(species, []).append(name)
+                _french.setdefault(_fold(name), species)
     return _taxa
 
 
+def _fold(name):
+    """a French name to compare: without accents nor capitals, œ as oe"""
+    name = (name or '').replace('œ', 'oe').replace('Œ', 'Oe').replace('æ', 'ae')
+    return photoindex.fold(' '.join(name.split()))
+
+
 def wild(pairs):
-    """the Latin names of these species, [(French, Latin)], less their
-    domestic forms ("Canard musqué (forme domestique)", "Anser anser
-    (Domestic type)"; the Moineau domestique is wild)"""
-    return [latin for french, latin in pairs
+    """these species, [(French, Latin)], less their domestic forms ("Canard
+    musqué (forme domestique)", "Anser anser (Domestic type)"; the Moineau
+    domestique is wild)"""
+    return [(french, latin) for french, latin in pairs
             if latin and '(forme domestique)' not in (french or '').lower()
-            and 'domestic' not in latin.lower()]
+            and 'domestic type' not in latin.lower()]
 
 
 def period(day):
@@ -199,16 +209,19 @@ def period(day):
     return (day.month - 1) * 4 + min(3, (day.day - 1) // 7)
 
 
-def share(region, latin, day, width=None):
+def share(region, latin, day, width=None, french=''):
     """the share of the checklists of the region that report the species
     around that day (the period of the day and `width` periods on each side,
-    WIDTH by default); None when it cannot be told (see the module)"""
+    WIDTH by default); None when it cannot be told (see the module). french:
+    its French name, should eBird not know its Latin name"""
     cfg = _config_module.load()
     width = cfg.get('rare_width', WIDTH) if width is None else width
     latin = ' '.join((latin or '').split())
     if not region or not latin or 'sp.' in latin or '/' in latin or ' x ' in latin:
         return None
     names = taxonomy().get(' '.join(latin.split()[:2]))
+    if not names and french:
+        names = taxonomy().get(_french.get(_fold(french), ''))
     if not names:
         return None
     sizes, shares = _read(region)
@@ -223,20 +236,20 @@ def share(region, latin, day, width=None):
     return None
 
 
-def assess(region, latins, day, width=None):
-    """(1 when one of these species is rare in the region around that day,
-    0 when none is, None when that cannot be told for any of them; the
-    lowest of their shares, None without any)"""
-    found = [share(region, latin, day, width) for latin in latins if latin]
+def assess(region, pairs, day, width=None):
+    """(1 when one of these species, [(French, Latin)], is rare in the
+    region around that day, 0 when none is, None when that cannot be told
+    for any of them; the lowest of their shares, None without any)"""
+    found = [share(region, latin, day, width, french) for french, latin in pairs if latin]
     known = [value for value in found if value is not None]
     if not known:
         return None, None
     return int(min(known) < _config_module.load().get('rare_share', RARE)), min(known)
 
 
-def rare(region, latins, day):
+def rare(region, pairs, day):
     """assess, the first half"""
-    return assess(region, latins, day)[0]
+    return assess(region, pairs, day)[0]
 
 
 def fetch_all(regions, tell=None):

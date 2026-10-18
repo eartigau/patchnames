@@ -483,26 +483,28 @@ def _note(value):
         return None
 
 
-def _rare(region, latins, day):
-    """rarity.rare, None when the bar chart of the region cannot be had"""
+def _rare(region, pairs, day):
+    """rarity.assess, (None, None) when the bar chart of the region cannot
+    be had"""
     try:
-        return rarity.rare(region, latins, day)
+        return rarity.assess(region, pairs, day)
     except (RuntimeError, OSError, subprocess.TimeoutExpired) as exc:
         print(f'  (oiseau rare ou non : {exc})', flush=True)
-        return None
+        return None, None
 
 
 def mark_rare(db, seqs=None, dry=False):
-    """Tell again which described sequences are rare birds (rarity.py),
-    from their species and the region and day of their checklist: every one,
-    or those of `seqs`; the bar charts missing are asked through Safari
-    first. A sequence whose label changes is to be written again, and so is
+    """Tell again which described sequences are rare birds (rarity.py), and
+    the share of the checklists that report their rarest species (column
+    frequency), from their species and the region and day of their
+    checklist: every one, or those of `seqs`; the bar charts missing are
+    asked through Safari first. A sequence whose label changes is to be written again, and so is
     one whose keywords held Claude's own "oiseau rare" (the label is the bar
     charts'). dry: change nothing. Returns {'looked', 'rare', 'changed',
     'open', 'found', 'failed'}: found, [(name, species, region, day, share)]
     of the rare ones; failed, {region: why} of the bar charts not had."""
     rows = db.execute(
-        'SELECT p.name, p.seq, p.species, p.latin, p.rare, p.keywords, p.written, c.state, c.day '
+        'SELECT p.name, p.seq, p.species, p.latin, p.rare, p.frequency, p.keywords, c.state, c.day '
         'FROM photos p LEFT JOIN checklists c ON c.sid = p.checklist '
         'WHERE p.rep = 1 AND p.described IS NOT NULL').fetchall()
     if seqs is not None:
@@ -524,14 +526,16 @@ def mark_rare(db, seqs=None, dry=False):
             out['found'].append((row['name'], row['species'], row['state'], row['day'], share))
         words = [word for word in (row['keywords'] or '').split(photoindex.SEP) if word]
         kept = [word for word in words if photoindex.fold(word) != photoindex.fold(rarity.LABEL)]
-        if rare == row['rare'] and kept == words:
+        if rare == row['rare'] and share == row['frequency'] and kept == words:
             continue
-        out['changed'] += (rare == 1) != (row['rare'] == 1) or kept != words
+        # (the files carry the label, not the share)
+        again = (rare == 1) != (row['rare'] == 1) or kept != words
+        out['changed'] += again
         if dry:
             continue
-        again = (rare == 1) != (row['rare'] == 1) or kept != words
-        db.execute('UPDATE photos SET rare = ?, keywords = ?' + (", written = 'pending'" if again else '')
-                   + ' WHERE seq = ?', (rare, photoindex.SEP.join(kept), row['seq']))
+        db.execute('UPDATE photos SET rare = ?, frequency = ?, keywords = ?'
+                   + (", written = 'pending'" if again else '') + ' WHERE seq = ?',
+                   (rare, share, photoindex.SEP.join(kept), row['seq']))
         changed.append(row['name'])
     if not dry:
         photoindex._derive(db, changed)
@@ -568,7 +572,7 @@ def settle(seq, answer, data):
     answer['autres_mots_cles'] = [word for word in answer.get('autres_mots_cles') or []
                                   if photoindex.fold(word) != photoindex.fold(rarity.LABEL)]
     if checklist:
-        sure['rare'] = _rare(checklist.state, rarity.wild(
+        sure['rare'], sure['frequency'] = _rare(checklist.state, rarity.wild(
             [(sp.get('francais', ''), sp.get('latin', '')) for sp in answer.get('especes') or []]),
             checklist.day)
         # what the photographer wrote in the checklist, summed up after the
@@ -3015,8 +3019,10 @@ def main():
     p_rare = sub.add_parser(
         'rares', help='Donner le mot-clé « oiseau rare » aux séquences décrites dont une espèce '
                       'est rapportée sur moins de 0,5 %% des listes eBird de la région de leur '
-                      "liste à cette période de l'année (les histogrammes eBird ; ceux qui "
-                      'manquent sont demandés par Safari, une fois par région).')
+                      "liste à cette période de l'année, et garder pour chaque oiseau la part "
+                      'des listes de son espèce la plus rare, pour le tri « Par rareté » (les '
+                      'histogrammes eBird ; ceux qui manquent sont demandés par Safari, une '
+                      'fois par région).')
     p_rare.add_argument('--essai', action='store_true',
                         help='Dire seulement quelles séquences seraient des oiseaux rares, sans '
                              'rien changer.')
@@ -3092,8 +3098,8 @@ def main():
         print(f"{out['rare']} oiseau{'x' * (out['rare'] > 1)} rare{'s' * (out['rare'] > 1)} sur "
               f"{out['looked']} séquences décrites ; {out['open']} sans réponse (pas de liste eBird, "
               "pas d'espèce, ou un nom qu'eBird ne connaît pas) ; "
-              + (f"{_count(out['changed'], 'séquence')} à changer." if args.essai else
-                 f"{_count(out['changed'], 'séquence')} changée{'s' * (out['changed'] > 1)}, dont les "
+              + (f"{_count(out['changed'], 'séquence')} dont le mot-clé changerait." if args.essai
+                 else f"{_count(out['changed'], 'séquence')} dont le mot-clé a changé : leurs "
                  'fichiers seront récrits par la page de recherche.'))
         return
     if args.cmd == 'app':

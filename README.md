@@ -325,6 +325,13 @@ porte la marque « rare », la visionneuse un badge, et « Afficher : les
 oiseaux rares » les retrouve. C'est la règle qui donne ce mot-clé, pas
 Claude : un « oiseau rare » qu'il proposerait lui-même est retiré.
 
+Chaque oiseau décrit garde aussi la part des listes qui rapportent son
+espèce la plus rare (colonne `frequency` de la base, de 0,016 % pour le
+Héron garde-bœufs de juin 2026 au Québec à 73 % pour la Corneille noire à
+Genève) : la visionneuse la montre, « 0,035 % des listes », et le tri
+« Par rareté » met les plus rares en tête. Elle reste dans la base ; seul le
+mot-clé va dans les fichiers.
+
 Les fréquences sont celles des histogrammes d'eBird
 (`https://ebird.org/barchartData?r=CA-QC&bmo=1&emo=12&byr=1900&eyr=2026&fmt=tsv`) :
 quatre périodes par mois (du 1er au 7, du 8 au 14, du 15 au 21, du 22 à la
@@ -335,10 +342,12 @@ téléchargé dans `~/Downloads`. Chaque région n'est demandée qu'une fois,
 puis gardée dans le dossier de la base, `~/photo/patchdoc/ebird/histogrammes/` :
 Safari ne revient que pour une région où vous n'étiez jamais allé (les 118
 régions de vos listes y sont déjà). La taxonomie publique d'eBird, gardée
-dans `ebird/` aussi, relie leurs noms français aux noms latins de la base ;
-une espèce compte avec ses sous-espèces et ses formes, et une forme
-domestique (« Canard musqué (forme domestique) ») n'est jamais rare : peu
-d'observateurs la notent. Le dossier `ebird/` part avec la sauvegarde de la
+dans `ebird/` aussi, relie leurs noms français aux noms latins de la base
+(un nom latin qu'eBird n'emploie plus, *Bubulcus ibis* devenu *Ardea ibis*,
+est retrouvé par le nom français, sans tenir compte des accents ni de la
+ligature œ) ; une espèce compte avec ses sous-espèces et ses formes, et une
+forme domestique (« Canard musqué (forme domestique) ») n'est jamais rare :
+peu d'observateurs la notent. Le dossier `ebird/` part avec la sauvegarde de la
 base sur GitHub (voir plus bas).
 
 - La période de la photo est prise avec ses deux voisines, environ trois
@@ -414,7 +423,10 @@ de la liste, photos d'oiseaux sans liste).
 
 - **Tri.** Au-dessus de la galerie : « Plus récentes », « Plus anciennes »,
   « Par espèce » (les séquences qui ont une espèce d'abord, dans l'ordre
-  alphabétique), « Panoramas d'abord » et « Personnes d'abord » (les photos
+  alphabétique), « Par rareté » (les oiseaux dont l'espèce est sur la plus
+  petite part des listes eBird de la région à cette période de l'année
+  d'abord : voir « Les oiseaux rares »), « Panoramas d'abord » et
+  « Personnes d'abord » (les photos
   où quelqu'un est nommé, puis celles où un nom est proposé, puis les
   visages pas encore nommés). Une photo sans date, ou datée dans le futur
   par un appareil mal réglé, vient toujours à la fin.

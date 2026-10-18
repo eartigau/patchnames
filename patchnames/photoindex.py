@@ -69,6 +69,8 @@ COLUMNS = ('name', 'path', 'stem', 'ext',
            'rare',             # 1: one of its species is rare in the region of its checklist at
                                #   that time of the year (rarity.py), 0: none is; NULL when that
                                #   cannot be told
+           'frequency',        # the share of the eBird checklists of that region that report
+                               #   the rarest of its species at that time of the year, 0 to 1
            'location', 'county', 'state', 'country', 'lat', 'lon',
            'own_position',     # 1 when lat and lon are the position the photo carries itself
                                #   (a phone) and the place is named from it, not from the
@@ -86,6 +88,7 @@ COLUMNS = ('name', 'path', 'stem', 'ext',
 TYPES = {'clock_offset': 'REAL', 'zone': 'REAL', 'focal': 'REAL', 'lat': 'REAL', 'lon': 'REAL',
          'bird': 'INTEGER', 'seq_n': 'INTEGER', 'rep': 'INTEGER', 'on_checklist': 'INTEGER',
          'own_position': 'INTEGER', 'turned': 'INTEGER', 'upright': 'INTEGER', 'rare': 'INTEGER',
+         'frequency': 'REAL',
          'eye':'INTEGER', 'clear': 'INTEGER', 'level': 'INTEGER', 'faces': 'INTEGER',
          'sharp': 'REAL', 'best': 'INTEGER', 'eye_x': 'REAL', 'eye_y': 'REAL'}
 
@@ -583,7 +586,8 @@ def _where(q='', species='', listed=False, place='', region='', year='', since='
 #: the orders of the search page. The last three bring first what they are
 #:  named after (the sequences with a species, by its name; the panoramas;
 #:  the photos with people: those named, those proposed, then the faces
-#:  nobody named yet), and the rest after, the newest first
+#:  nobody named yet; the birds, the rarest first: rarity.py), and the rest
+#:  after, the newest first
 #:  (a photo without a date, or dated after today by a camera whose clock was
 #:  wrong, comes last in either direction; names are compared as French
 #:  does, É with E: the collation FOLDED of collate())
@@ -595,6 +599,7 @@ ORDERS = {'new': _NEWEST,
           'title': f'p.title IS NULL, p.title COLLATE FOLDED, {_NEWEST}',
           'species': f"COALESCE(p.species, '') = '', NULLIF(p.species, '') COLLATE FOLDED, {_NEWEST}",
           'pano': f"COALESCE(p.camera LIKE '% (panorama)', 0) DESC, {_NEWEST}",
+          'rare': f'p.frequency IS NULL, p.frequency, {_NEWEST}',
           'people': "CASE WHEN COALESCE(p.people, '') != '' THEN 0 WHEN COALESCE(p.guessed, '') != '' "
                     'THEN 1 WHEN COALESCE(p.faces, 0) > 0 THEN 2 ELSE 3 END, '
                     f"COALESCE(NULLIF(p.people, ''), NULLIF(p.guessed, '')) COLLATE FOLDED, {_NEWEST}"}

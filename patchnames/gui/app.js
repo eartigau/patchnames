@@ -877,6 +877,12 @@ function totals(sums) {
     stat("Espèces identifiées", sums.species), stat("Lieux", sums.places));
 }
 
+// the share of the eBird checklists of the region that report the rarest
+// species of a bird photo at that time of the year, as a line of text
+const frequency = (photo) => photo.frequency === null || photo.frequency === undefined ? ""
+  : `${(100 * photo.frequency).toLocaleString("fr-CA", { maximumSignificantDigits: photo.frequency < 0.01 ? 2 : 3 })} % des listes eBird`
+    + (photo.state ? ` de ${photo.state}` : "") + " à cette période de l'année";
+
 function tile(photo, index) {
   const img = el("img", { src: image("thumb", photo.name), loading: "lazy", alt: photo.title || photo.name });
   img.addEventListener("error", () =>
@@ -903,7 +909,7 @@ function tile(photo, index) {
          el("div", { class: "where", text: [date, photo.location ? region(photo) : ""].filter(Boolean).join(" · ") })]));
   figure.title = [photo.title, photo.description, unsure && "Identification à confirmer",
     photo.on_checklist === 0 && "Espèce absente de la liste eBird",
-    photo.rare === 1 && "Oiseau rare : moins de 0,5 % des listes eBird de la région à cette période de l'année"]
+    photo.rare === 1 ? "Oiseau rare : " + frequency(photo) : frequency(photo) && "Espèce sur " + frequency(photo)]
     .filter(Boolean).join("\n");
   return figure;
 }
@@ -1515,6 +1521,12 @@ function info(photo) {
   if (photo.on_checklist === 1) badges.push(badge("sur la liste eBird", "good"));
   if (photo.on_checklist === 0) badges.push(badge("absente de la liste eBird", "alert"));
   if (photo.rare === 1) badges.push(badge("oiseau rare", "rare"));
+  if (frequency(photo)) {
+    const share = badge((100 * photo.frequency).toLocaleString("fr-CA", { maximumSignificantDigits: photo.frequency < 0.01 ? 2 : 3 })
+      + " % des listes", photo.rare === 1 ? "rare" : "");
+    share.title = "Espèce la plus rare de la photo : sur " + frequency(photo) + " (toutes années, histogrammes eBird)";
+    badges.push(share);
+  }
   if (photo.topic) badges.push(badge(photo.topic));
   if (photo.seq_n > 1) badges.push(badge(photo.seq_n + " vues"));
   if (badges.length) out.push(el("div", { class: "badges" }, badges));
