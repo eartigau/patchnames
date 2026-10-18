@@ -56,6 +56,10 @@ COLUMNS = ('name', 'path', 'stem', 'ext',
            'guessed',          # those faces.py proposes, not confirmed
            'faces',            # how many faces were found in it; NULL if nobody looked
            'note',             # what Claude says of the photo against the checklist
+           'ebird_summary',    # what the photographer wrote in the checklist (its comment, his
+                               #   notes on the species), summed up by Claude at the end of the
+                               #   description; '' when there was nothing to add, NULL if
+                               #   nobody looked (doc.summarize)
            'checklist',        # eBird submission ID
            'match',            # 'inside' or 'near' the hours of the checklist, 'other' (Claude's
                                #   choice among those of the day), 'gps' (no checklist, a place

@@ -277,6 +277,39 @@ le trousseau de macOS (ou dans `PATCHNAMES_EBIRD_USER`,
 `PATCHNAMES_EBIRD_PASSWORD`, `PATCHNAMES_IMAP_USER`,
 `PATCHNAMES_IMAP_PASSWORD`), jamais dans un fichier.
 
+### Ce que vous avez écrit dans vos listes eBird
+
+Quand la liste d'une séquence a un commentaire, ou une note sur une espèce
+(« connue, une dizaine d'observateurs », les caractères qui ont servi à
+identifier une grive, une première observation), Claude la résume en une
+phrase, 25 mots au plus, ajoutée à la fin de la description : « Oiseau déjà
+connu, vu par une dizaine d'observateurs. ». Il ne garde que ce qui
+concerne la photo ou la sortie : ce qui rend l'oiseau notable, son
+comportement, ce qui l'a fait identifier, avec qui ou pourquoi la sortie ;
+pas la météo générée par RainCrow, ni la distance ou le tracé GPS, ni les
+notes sur des espèces absentes de la photo. Les autres listes du même jour
+lui sont données avec leurs commentaires aussi, au cas où la séquence en
+viendrait. Le résumé est gardé à part dans la base (colonne
+`ebird_summary`) : une séquence rattachée ensuite à une autre liste
+(`patchdoc index --rematch`) le perd, et une identification corrigée dans
+la page le garde.
+
+Pour les séquences décrites avant que les descriptions le fassent, ou
+avant que vous ayez écrit le commentaire :
+
+```bash
+patchdoc commentaires --essai   # dire ce qui serait ajouté, sans rien changer
+patchdoc commentaires           # l'ajouter à leurs descriptions
+```
+
+Seules les séquences dont la liste a un commentaire ou une note, et jamais
+résumées, sont données à Claude, vingt à la fois, en texte seulement
+(Sonnet à effort réduit, config `summary_model` et `summary_effort`) :
+0,94 $ US au prix de l'API pour les 402 séquences de la première fois (84
+complétées ; les autres n'avaient que la météo de RainCrow, ou des notes
+sur d'autres espèces). Leurs fichiers sont ensuite récrits par la page de
+recherche, comme après une identification.
+
 ### Les doublons
 
 Une photo archivée à la mauvaise heure, puis corrigée, laisse deux

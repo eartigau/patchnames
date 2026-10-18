@@ -131,6 +131,20 @@ NAME = re.compile(r'^(\d{6})_(\d{6})(?:_([A-Z]{2}))?_[^.]+\.(\w+)$')
 SYSTEM = ("Tu décris des photos pour l'archive d'un photographe. Tu lis les images indiquées "
           "avec l'outil Read, puis tu réponds uniquement par l'objet JSON demandé.")
 
+#: what Claude makes of what the photographer wrote in an eBird checklist: a
+#:  sentence put at the end of the description (settle, summarize)
+SUMMARY_RULE = ("une phrase en français, 25 mots au plus, qui résume ce que le photographe a écrit "
+                "dans cette liste eBird (le commentaire de la liste, ses notes sur l'espèce "
+                "photographiée) et qui concerne la photo ou la sortie : ce qui rend l'oiseau notable "
+                "(rareté, première observation, oiseau égaré ou déjà connu des observateurs), son "
+                "comportement, ce qui l'a fait identifier, avec qui ou pourquoi la sortie. Écris-la "
+                "comme un fait (« Oiseau déjà connu, vu par une dizaine d'observateurs. »), sans "
+                "« le photographe note que ». Laisse de côté la météo générée automatiquement "
+                "(RainCrow...), la distance, le parcours et ce qu'en dit le GPS, ce qui est annoncé "
+                "pour plus tard (photos à venir), les notes sur des espèces qui ne sont pas sur la "
+                "photo, et ce que la description dit déjà ; \"\" s'il ne reste rien d'utile, ou si "
+                "la liste n'a ni commentaire ni note")
+
 PROMPT = """Tu décris une séquence de photos pour l'archive d'un photographe : un titre, le sujet, une description, des mots-clés, et l'espèce quand il s'agit d'un oiseau.
 
 Lis ces images avec l'outil Read :
@@ -163,7 +177,8 @@ Réponds par un objet JSON :
 - "oeil_x", "oeil_y" : pour un oiseau dont l'œil se voit, la position de cet œil dans la deuxième image (l'agrandissement à pleine résolution), en pourcentage de sa largeur depuis son bord gauche et de sa hauteur depuis son bord haut, de 0 à 100 ; s'il y a plusieurs oiseaux, l'œil de celui qui est le plus net ; null si aucun œil ne se voit dans cette image ou s'il n'y a pas d'oiseau ;
 - "vues" : s'il y a des planches « vues », une entrée par vue numérotée, pour trouver la meilleure de la rafale : {{"numero": "...", "oeil_visible": true si l'œil de l'oiseau se voit dans cette vue, "oeil_x" et "oeil_y": la position de cet œil dans la vue (pas dans la planche), en pourcentage de sa largeur depuis son bord gauche et de sa hauteur depuis son bord haut, de 0 à 100 (null si l'œil ne se voit pas ; s'il y a plusieurs oiseaux, l'œil de celui qui est le plus net), "oeil_net": la netteté de l'œil de 1 à 5 jugée grossièrement sur cette vue réduite, 4 au plus (elle sera reprise à pleine résolution ; null si l'œil ne se voit pas), "degage": 1 à 5, "hauteur_oeil": 1 à 5}}, avec les mêmes échelles ; "degage" et "hauteur_oeil" valent null si l'oiseau n'est pas dans la vue. Les vues d'une rafale diffèrent (l'oiseau tourne la tête, passe derrière une branche, s'envole) : note chacune pour elle-même. [] sans ces planches ;
 - "liste" : l'identifiant (S...) de la liste eBird à laquelle la séquence appartient, null s'il n'y en a pas ;
-- "note_ebird" : une phrase seulement si ce que tu vois ne s'accorde pas avec la liste eBird (espèce absente de la liste, autre espèce plus probable que celle notée) ; une chaîne vide "" quand la photo s'accorde avec la liste ou qu'il n'y a pas de liste."""
+- "note_ebird" : une phrase seulement si ce que tu vois ne s'accorde pas avec la liste eBird (espèce absente de la liste, autre espèce plus probable que celle notée) ; une chaîne vide "" quand la photo s'accorde avec la liste ou qu'il n'y a pas de liste ;
+- "resume_ebird" : pour la liste donnée dans "liste", """ + SUMMARY_RULE + """ ; ne le répète pas dans "description" : il y est ajouté à la suite ; "" sans liste."""
 
 VIEWS = ("La première est la vue du milieu de la séquence, réduite ; la deuxième est un "
          "agrandissement de cette vue à pleine résolution autour du point de mise au point de "
@@ -244,10 +259,11 @@ SCHEMA = {
             'additionalProperties': False}},
         'liste': {'type': ['string', 'null']},
         'note_ebird': {'type': 'string'},
+        'resume_ebird': {'type': 'string'},
     },
     'required': ['titre', 'sujet', 'especes', 'habitat', 'description', 'certitude',
                  'autres_mots_cles', 'oeil_net', 'degage', 'hauteur_oeil', 'oeil_x', 'oeil_y',
-                 'vues', 'liste', 'note_ebird'],
+                 'vues', 'liste', 'note_ebird', 'resume_ebird'],
     'additionalProperties': False,
 }
 
@@ -492,6 +508,13 @@ def settle(seq, answer, data):
         sure.update(_place(checklist))
     if not answer:
         return sure, checklist
+    if checklist:
+        # what the photographer wrote in the checklist, summed up after the
+        #   description (in the answer too, which the files may be given)
+        summary = ' '.join(str(answer.get('resume_ebird') or '').split())
+        if summary and summary not in answer['description']:
+            answer['description'] = f"{answer['description'].rstrip()} {summary}"
+        sure['ebird_summary'] = summary
     species = answer.get('especes') or []
     # a photo taken near a list, not during it, is not held against the list
     on_list = _on_list([sp.get('latin', '') for sp in species],
@@ -1084,7 +1107,7 @@ def _groups_of(names, notes):
 
 def _list_text(checklist, full):
     """a checklist for the prompt: every species with its count (full), or
-    the names only"""
+    the names only; with what the photographer wrote in it either way"""
     county = f'{checklist.county}, ' if checklist.county else ''
     when = f'{checklist.start:%Y-%m-%d %H:%M}' if checklist.start else f'{checklist.day}, sans heure'
     length = f', {checklist.duration} min' if checklist.duration else ''
@@ -1092,7 +1115,10 @@ def _list_text(checklist, full):
             f'{_ebird.country_name(checklist.country)}), {when}{length}, '
             f'{len(checklist.species)} espèces')
     if not full:
-        return head + ' : ' + ', '.join(f"{sp['francais']} ({sp['latin']})" for sp in checklist.species)
+        notes = [f"{sp['francais']} : « {sp['details']} »" for sp in checklist.species if sp['details']]
+        return (head + ' : ' + ', '.join(f"{sp['francais']} ({sp['latin']})" for sp in checklist.species)
+                + (' ; notes du photographe : ' + ' ; '.join(notes) if notes else '')
+                + (f' ; commentaire de la liste : {checklist.comments}' if checklist.comments else ''))
     lines = [head]
     for sp in checklist.species:
         details = f' ; note du photographe : « {sp["details"]} »' if sp['details'] else ''
@@ -1922,8 +1948,12 @@ def rematch():
              kept['county'], kept['state'], kept['country'], kept['lat'], kept['lon'],
              photoindex.place_text(kept), f"{kept['clock_offset']:+g} hours", row['seq']))
         if row['checklist'] and kept['checklist'] != row['checklist']:
-            # (what Claude said of the photo against a checklist it is no longer tied to)
-            db.execute("UPDATE photos SET note = '' WHERE seq = ?", (row['seq'],))
+            # (what Claude said of the photo against a checklist it is no longer tied
+            #   to, and what it summed up of that checklist)
+            db.execute("UPDATE photos SET note = '', description = CASE "
+                       "WHEN COALESCE(ebird_summary, '') != '' "
+                       "THEN rtrim(replace(description, ' ' || ebird_summary, '')) "
+                       'ELSE description END, ebird_summary = NULL WHERE seq = ?', (row['seq'],))
         if (kept['checklist'], kept['location']) != (row['checklist'], row['location'] or ''):
             # (what the files say of their checklist and their place is to be written again)
             db.execute("UPDATE photos SET written = 'pending' WHERE seq = ? AND written IS NOT NULL "
@@ -2197,7 +2227,8 @@ def correct_species(seq_id, old, new):
         description = row['description'] or ''
         if pair != was:
             description = (f"{named['titre']}. Identification corrigée par le photographe"
-                           + (f' (proposée d\'abord : {was[0]})' if was else '') + '.')
+                           + (f' (proposée d\'abord : {was[0]})' if was else '') + '.'
+                           + (f" {row['ebird_summary']}" if row['ebird_summary'] else ''))
         words = [word for word in (row['keywords'] or '').split(photoindex.SEP)
                  if word and word != UNKNOWN and photoindex.fold(word) not in
                  {photoindex.fold(name) for name in (was or ()) if name}]
@@ -2608,6 +2639,106 @@ def orient(stop=None, tell=None, model=None, effort=None, most=None, dry=False, 
         db.close()
 
 
+#: the sequences Claude is given at once, to sum up what their checklists say
+SUMMARY_GROUP = 20
+SUMMARY_SYSTEM = ("Tu résumes en français ce qu'un ornithologue a écrit dans ses listes eBird, pour "
+                  "les descriptions des photos de son archive. Réponds par l'objet JSON demandé.")
+SUMMARY_PROMPT = """Voici des séquences de photos de l'archive d'un photographe, chacune avec sa description et la liste eBird pendant laquelle elle a été prise, avec ce qu'il y a écrit.
+
+{sequences}
+
+Pour chaque séquence, "resume" : {rule}. Réponds par un objet JSON : {{"resumes": [{{"sequence": "...", "resume": "..."}}]}}, une entrée par séquence, avec son nom tel qu'il est donné."""
+SUMMARY_SCHEMA = {'type': 'object', 'required': ['resumes'], 'additionalProperties': False,
+                  'properties': {'resumes': {'type': 'array', 'items': {
+                      'type': 'object', 'required': ['sequence', 'resume'],
+                      'additionalProperties': False,
+                      'properties': {'sequence': {'type': 'string'},
+                                     'resume': {'type': 'string'}}}}}}
+
+
+def _written(checklist):
+    """what the photographer wrote in a checklist, for a prompt: its comment
+    and his notes on its species; '' when there is none"""
+    notes = [f"{sp['francais']} ({sp['latin']}) : « {sp['details']} »"
+             for sp in checklist.species if sp['details']]
+    return ' ; '.join(([f'commentaire de la liste : « {checklist.comments} »']
+                       if checklist.comments else [])
+                      + (['notes sur les espèces : ' + ' ; '.join(notes)] if notes else []))
+
+
+def summarize(stop=None, tell=None, model=None, effort=None, dry=False):
+    """Sum up at the end of their descriptions what the photographer wrote in
+    the checklists of sequences Claude described before its descriptions did
+    it themselves (settle, SUMMARY_RULE): those tied to a checklist that has
+    a comment, or notes on its species, and never summed up (column
+    ebird_summary NULL). Claude is given SUMMARY_GROUP sequences at a time,
+    as text (their descriptions, no picture). The files of the sequences
+    whose description changed are to be written again (the search page does
+    it). dry: say what would be added, change nothing. tell(counts) after
+    each call. Returns {'looked', 'added', 'left', 'cost', 'found'}, found:
+    [(name, summary)]."""
+    data = _ebird.load()
+    if data is None:
+        raise RuntimeError('Pas de données eBird (voir `patchdoc ebird`).')
+    model = model or _cfg().get('summary_model')
+    effort = effort or _cfg().get('summary_effort')
+    db = photoindex.connect()
+    try:
+        rows = [row for row in db.execute(
+            'SELECT name, seq, title, species, description, checklist FROM photos WHERE rep = 1 '
+            'AND described IS NOT NULL AND ebird_summary IS NULL AND checklist IS NOT NULL '
+            'ORDER BY COALESCE(local, taken) DESC')
+            if row['checklist'] in data.lists and _written(data.lists[row['checklist']])]
+        out = {'looked': 0, 'added': 0, 'left': len(rows), 'cost': 0.0, 'found': []}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            for start in range(0, len(rows), SUMMARY_GROUP):
+                if stop is not None and stop.is_set():
+                    break
+                part = {row['seq']: row for row in rows[start:start + SUMMARY_GROUP]}
+                told = []
+                for seq, row in part.items():
+                    listed = data.lists[row['checklist']]
+                    when = f'{listed.start:%Y-%m-%d %H:%M}' if listed.start else str(listed.day)
+                    told.append(f"Séquence {seq} : {row['title']}"
+                                + (f" ; espèces : {row['species']}" if row['species'] else '')
+                                + f"\n  Description : {row['description'] or ''}"
+                                + f'\n  Liste eBird {listed.sid}, {listed.location}, {when} : '
+                                + _written(listed))
+                answer, cost = ask_claude(
+                    SUMMARY_PROMPT.format(sequences='\n\n'.join(told), rule=SUMMARY_RULE),
+                    tmpdir, model, effort, schema=SUMMARY_SCHEMA, system=SUMMARY_SYSTEM, needs=())
+                out['cost'] += cost
+                said = {str(item.get('sequence')): ' '.join(str(item.get('resume') or '').split())
+                        for item in answer.get('resumes') or [] if isinstance(item, dict)}
+                changed = []
+                for seq, row in part.items():
+                    if seq not in said:
+                        continue        # (left out of the answer: another time)
+                    description = row['description'] or ''
+                    summary = '' if said[seq] in description else said[seq]
+                    if summary:
+                        out['found'].append((row['name'], summary))
+                        out['added'] += 1
+                    if dry:
+                        continue
+                    if summary:
+                        db.execute("UPDATE photos SET description = ?, ebird_summary = ?, "
+                                   "written = 'pending' WHERE seq = ?",
+                                   (f'{description.rstrip()} {summary}', summary, seq))
+                        changed.append(row['name'])
+                    else:
+                        db.execute("UPDATE photos SET ebird_summary = '' WHERE seq = ?", (seq,))
+                photoindex._derive(db, changed)     # (the search text)
+                db.commit()
+                out['looked'] += len(part)
+                out['left'] -= len(part)
+                if tell:
+                    tell(dict(out, found=len(out['found'])))
+        return out
+    finally:
+        db.close()
+
+
 def pending_writes():
     """the sequences whose files still wait for what the index says of them"""
     db = photoindex.connect()
@@ -2797,6 +2928,16 @@ def main():
     p_orient.add_argument('--modele', default=None,
                           help='Le modèle de Claude (config orient_model, sonnet).')
 
+    p_sum = sub.add_parser(
+        'commentaires', help='Ajouter à la fin des descriptions déjà faites un résumé de ce que '
+                             'vous avez écrit dans leur liste eBird (le commentaire de la liste, '
+                             "vos notes sur l'espèce) ; les nouvelles descriptions le font "
+                             "d'elles-mêmes.")
+    p_sum.add_argument('--essai', action='store_true',
+                       help='Dire seulement ce qui serait ajouté, sans rien changer.')
+    p_sum.add_argument('--modele', default=None,
+                       help='Le modèle de Claude (config summary_model, sonnet).')
+
     p_app = sub.add_parser(
         'app', help="Faire l'application patchdoc et la mettre dans le Dock : un clic démarre "
                     "la page de recherche et l'ouvre.")
@@ -2841,6 +2982,20 @@ def main():
         for name, way in out['found']:
             print(f"  {'à tourner' if args.essai else 'tournée'} : {name} ({way})")
         print(f"Claude : {out['cost']:.2f} $ US au prix de l'API.")
+        return
+    if args.cmd == 'commentaires':
+        said = lambda out: print(f"  {out['looked']} regardées, {out['found']} complétées, "
+                                 f"{out['left']} à regarder", flush=True)
+        try:
+            out = summarize(tell=said, model=args.modele, dry=args.essai)
+        except RuntimeError as exc:
+            print(exc)
+            return
+        for name, summary in out['found']:
+            print(f"  {'à ajouter' if args.essai else 'ajouté'} : {name} : {summary}")
+        print(f"Claude : {out['cost']:.2f} $ US au prix de l'API."
+              + ('' if args.essai or not out['added'] else
+                 ' Les fichiers seront récrits par la page de recherche (`patchdoc gui`).'))
         return
     if args.cmd == 'app':
         from . import macapp

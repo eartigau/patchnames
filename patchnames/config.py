@@ -72,6 +72,10 @@ DEFAULTS = {
     #   (doc.orient): Haiku misses some that Sonnet finds
     'orient_model': 'sonnet',
     'orient_effort': 'low',
+    # the model and the effort of Claude when it sums up what the checklists
+    #   of sequences described before say (doc.summarize): text only
+    'summary_model': 'sonnet',
+    'summary_effort': 'low',
     # the backup of the index on GitHub (backup.py): the private repository it
     #   goes to, 'account/name' (None: patchdoc-sauvegarde of the account gh is
     #   logged in to), and how many backups are kept there
