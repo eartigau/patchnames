@@ -35,6 +35,15 @@ read back with nothing but openssl and gunzip, on any machine:
 is read back before it is sent, the last ones are kept (config
 'backup_keep', 5) and the older ones removed: files of a release, not of the
 repository itself, which would grow by one whole backup at each of them.
+
+The statistics of eBird kept in the folder of the index (ebird/: the bar
+charts of the regions, the taxonomy; rarity.py) go to the same release, a
+tar.gz encrypted the same way, ebird-<its fingerprint>.tar.gz.enc: they
+change seldom, so a backup sends them only when they changed, and the copy
+before is removed. Read back:
+
+    openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -md sha256 \\
+        -in ebird-XXXXXXXXXXXX.tar.gz.enc | tar xz -C ~/photo/patchdoc
 """
 
 import gzip
@@ -45,6 +54,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 from datetime import datetime
@@ -65,7 +75,11 @@ Chaque fichier est la base `photos.sqlite`, sans les vignettes, compressée avec
 
     openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -md sha256 -in photos-AAAAMMJJ-HHMMSS.sqlite.gz.enc | gunzip > photos.sqlite
 
-ou `patchdoc sauvegarde --restaurer FICHIER`."""
+ou `patchdoc sauvegarde --restaurer FICHIER`.
+
+Le fichier `ebird-….tar.gz.enc` est le dossier `ebird/` de la base (les histogrammes eBird des régions et la taxonomie, qui disent quels oiseaux sont rares), chiffré de la même façon ; il n'est renvoyé que lorsqu'il change. Pour le relire :
+
+    openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -md sha256 -in ebird-XXXXXXXXXXXX.tar.gz.enc | tar xz -C ~/photo/patchdoc"""
 #: the line of the notes that holds the hint of the password
 HINT_LINE = 'Indice du mot de passe : '
 
@@ -242,6 +256,40 @@ def make(folder, secret, tell=None):
     return final
 
 
+def _stats():
+    """the files of the statistics of eBird, [(path, its name in the
+    archive)], and their fingerprint; ([], None) without any"""
+    root = photoindex.index_dir()
+    folder = os.path.join(root, 'ebird')
+    files = sorted(os.path.join(top, name) for top, _, names in os.walk(folder)
+                   for name in names if not name.startswith('.'))
+    if not files:
+        return [], None
+    digest = hashlib.sha256()
+    for path in files:
+        digest.update(os.path.relpath(path, root).encode() + b'\0' + _sum(path).encode())
+    return [(path, os.path.relpath(path, root)) for path in files], digest.hexdigest()[:12]
+
+
+def make_stats(folder, secret, files, mark):
+    """the statistics of eBird in a folder, ready to send: a tar.gz of
+    them, encrypted, read back. Returns its path."""
+    packed = os.path.join(folder, 'ebird.tar.gz')
+    with tarfile.open(packed, 'w:gz') as archive:
+        for path, name in files:
+            archive.add(path, arcname=name)
+    final = os.path.join(folder, f'ebird-{mark}.tar.gz.enc')
+    _crypt(packed, final, secret)
+    back = packed + '.relu'
+    _crypt(final, back, secret, decrypt=True)
+    if _sum(back) != _sum(packed):
+        raise RuntimeError("les statistiques eBird chiffrées ne se relisent pas à l'identique : "
+                           "elles ne sont pas envoyées")
+    os.remove(back)
+    os.remove(packed)
+    return final
+
+
 def run(tell=None):
     """Back the index up to GitHub (see the module). Raises RuntimeError.
     Returns {'when', 'name', 'bytes', 'repo', 'kept'}, which the index keeps
@@ -263,13 +311,28 @@ def run(tell=None):
         out = {'when': datetime.now().isoformat(' ', 'minutes'), 'name': os.path.basename(final),
                'bytes': os.path.getsize(final), 'repo': name}
     # the last ones are kept, the older ones removed
-    assets = sorted(line for line in _gh('release', 'view', TAG, '-R', name, '--json', 'assets',
-                                         '-q', '.assets[].name', timeout=60).stdout.split()
+    there = _gh('release', 'view', TAG, '-R', name, '--json', 'assets', '-q', '.assets[].name',
+                timeout=60).stdout.split()
+    assets = sorted(line for line in there
                     if line.startswith('photos-') and line.endswith('.sqlite.gz.enc'))
     keep = max(1, int(cfg.get('backup_keep') or 5))
     for old in assets[:-keep]:
         _gh('release', 'delete-asset', TAG, old, '-R', name, '-y', check=False, timeout=120)
     out['kept'] = min(len(assets), keep)
+    # the statistics of eBird, when they changed since they were sent
+    files, mark = _stats()
+    if mark:
+        stats = f'ebird-{mark}.tar.gz.enc'
+        if stats not in there:
+            tell('statistiques eBird')
+            with tempfile.TemporaryDirectory() as folder:
+                _gh('release', 'upload', TAG, make_stats(folder, secret, files, mark), '-R', name,
+                    '--clobber')
+            for old in there:
+                if old.startswith('ebird-') and old.endswith('.tar.gz.enc') and old != stats:
+                    _gh('release', 'delete-asset', TAG, old, '-R', name, '-y', check=False,
+                        timeout=120)
+        out['stats'] = stats
     db = photoindex.connect()
     photoindex.set_meta(db, 'backup_last', json.dumps(out))
     db.close()

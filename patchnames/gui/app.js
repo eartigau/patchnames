@@ -887,6 +887,7 @@ function tile(photo, index) {
     el("span", {},
       unsure && el("span", { class: "mark warn", text: "?" }),
       photo.on_checklist === 0 && el("span", { class: "mark alert", text: "≠" }),
+      photo.rare === 1 && el("span", { class: "mark rare", text: "rare" }),
       hasEye(photo) && loupeIcon((event) => loupe(event, photo))));
   const date = (photo.local || photo.taken || "").slice(0, 10);
   // a title that is a species: its French name, and its Latin name on a line of its own
@@ -901,7 +902,9 @@ function tile(photo, index) {
       : [el("div", { class: "name none", text: photo.location || "Pas encore décrite" }),
          el("div", { class: "where", text: [date, photo.location ? region(photo) : ""].filter(Boolean).join(" · ") })]));
   figure.title = [photo.title, photo.description, unsure && "Identification à confirmer",
-    photo.on_checklist === 0 && "Espèce absente de la liste eBird"].filter(Boolean).join("\n");
+    photo.on_checklist === 0 && "Espèce absente de la liste eBird",
+    photo.rare === 1 && "Oiseau rare : moins de 0,5 % des listes eBird de la région à cette période de l'année"]
+    .filter(Boolean).join("\n");
   return figure;
 }
 
@@ -1511,6 +1514,7 @@ function info(photo) {
   }
   if (photo.on_checklist === 1) badges.push(badge("sur la liste eBird", "good"));
   if (photo.on_checklist === 0) badges.push(badge("absente de la liste eBird", "alert"));
+  if (photo.rare === 1) badges.push(badge("oiseau rare", "rare"));
   if (photo.topic) badges.push(badge(photo.topic));
   if (photo.seq_n > 1) badges.push(badge(photo.seq_n + " vues"));
   if (badges.length) out.push(el("div", { class: "badges" }, badges));

@@ -76,6 +76,11 @@ DEFAULTS = {
     #   of sequences described before say (doc.summarize): text only
     'summary_model': 'sonnet',
     'summary_effort': 'low',
+    # a rare bird (rarity.py): one of its species is reported on less than
+    #   this share of the eBird checklists of the region of its checklist, in
+    #   the week of the year of the photo and this many weeks on each side
+    'rare_share': 0.005,
+    'rare_width': 1,
     # the backup of the index on GitHub (backup.py): the private repository it
     #   goes to, 'account/name' (None: patchdoc-sauvegarde of the account gh is
     #   logged in to), and how many backups are kept there

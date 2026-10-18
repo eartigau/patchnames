@@ -315,6 +315,53 @@ complétées ; les autres n'avaient que la météo de RainCrow, ou des notes
 sur d'autres espèces). Leurs fichiers sont ensuite récrits par la page de
 recherche, comme après une identification.
 
+### Les oiseaux rares
+
+Une séquence prend le mot-clé « oiseau rare » quand une de ses espèces est
+rapportée sur moins de 0,5 % des listes eBird de la région de sa liste (la
+province ou l'État : CA-QC, MX-YUC...) à cette période de l'année, toutes
+années réunies : le statut d'une espèce change peu. Dans la page, sa tuile
+porte la marque « rare », la visionneuse un badge, et « Afficher : les
+oiseaux rares » les retrouve. C'est la règle qui donne ce mot-clé, pas
+Claude : un « oiseau rare » qu'il proposerait lui-même est retiré.
+
+Les fréquences sont celles des histogrammes d'eBird
+(`https://ebird.org/barchartData?r=CA-QC&bmo=1&emo=12&byr=1900&eyr=2026&fmt=tsv`) :
+quatre périodes par mois (du 1er au 7, du 8 au 14, du 15 au 21, du 22 à la
+fin), la part des listes de la région qui rapportent chaque espèce. eBird
+ne les donne qu'à un compte connecté : patchdoc les demande à Safari, qui
+l'est, dans une fenêtre qu'il referme ensuite, et prend le fichier
+téléchargé dans `~/Downloads`. Chaque région n'est demandée qu'une fois,
+puis gardée dans le dossier de la base, `~/photo/patchdoc/ebird/histogrammes/` :
+Safari ne revient que pour une région où vous n'étiez jamais allé (les 118
+régions de vos listes y sont déjà). La taxonomie publique d'eBird, gardée
+dans `ebird/` aussi, relie leurs noms français aux noms latins de la base ;
+une espèce compte avec ses sous-espèces et ses formes, et une forme
+domestique (« Canard musqué (forme domestique) ») n'est jamais rare : peu
+d'observateurs la notent. Le dossier `ebird/` part avec la sauvegarde de la
+base sur GitHub (voir plus bas).
+
+- La période de la photo est prise avec ses deux voisines, environ trois
+  semaines (config `rare_width`, 1 ; 0 pour la période seule) : toutes
+  années réunies, un oiseau rare vu par des centaines d'observateurs fait
+  monter sa propre semaine. Le Rougegorge familier de Montréal, le
+  11 janvier 2026 : 0,66 % des listes de sa semaine au Québec, 0,30 % avec
+  les semaines voisines. Le seuil est la config `rare_share` (0,005).
+- Une période qui a moins de 200 listes est élargie, jusqu'à quatre
+  périodes de chaque côté ; une région qui n'en a pas autant laisse la
+  question ouverte, comme un genre (« sp. »), une paire, un hybride ou un
+  nom latin qu'eBird ne connaît pas. Une espèce qu'eBird connaît mais que
+  la région n'a jamais eue est rare.
+- Les nouvelles descriptions reçoivent le mot-clé d'elles-mêmes ; une
+  identification corrigée et une séquence rattachée à une autre liste (à la
+  main, ou par `patchdoc index --rematch`) le refont. Pour les séquences
+  déjà décrites :
+
+```bash
+patchdoc rares --essai   # dire lesquelles sont des oiseaux rares, sans rien changer
+patchdoc rares           # leur donner le mot-clé ; la page récrit leurs fichiers
+```
+
 ### Les doublons
 
 Une photo archivée à la mauvaise heure, puis corrigée, laisse deux
@@ -508,6 +555,17 @@ connectée à votre compte (`gh auth login`).
   `photos.restauree.sqlite` sans jamais toucher à la base en usage. Si le
   trousseau n'a pas le mot de passe, ou en a un autre, elle le demande, avec
   son indice.
+- **Les statistiques eBird.** Le dossier `ebird/` de la base (les
+  histogrammes des régions et la taxonomie : voir « Les oiseaux rares »)
+  part dans la même « release », chiffré de la même façon, en un fichier
+  `ebird-….tar.gz.enc` nommé d'après son contenu : il n'est envoyé que
+  lorsqu'il a changé (une région nouvelle), et l'ancien est alors retiré.
+  Pour le relire :
+
+  ```
+  openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -md sha256 \
+      -in ebird-XXXXXXXXXXXX.tar.gz.enc | tar xz -C ~/photo/patchdoc
+  ```
 
 Regarder une copie de l'archive à laquelle il manque des photos ne retire
 rien à la base : les descriptions, les notes et les noms de toutes les

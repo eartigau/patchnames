@@ -66,7 +66,7 @@ import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from . import config as _config_module
 from . import ebird as _ebird
@@ -74,6 +74,7 @@ from . import faces
 from . import geo
 from . import pano
 from . import photoindex
+from . import rarity
 from . import remote
 from .keywords import (IMAGE_PATTERNS, UNSURE, _groups, _image, _pictures, _tags, _when,
                        quarters, turned, turned_box, upright,
@@ -482,6 +483,61 @@ def _note(value):
         return None
 
 
+def _rare(region, latins, day):
+    """rarity.rare, None when the bar chart of the region cannot be had"""
+    try:
+        return rarity.rare(region, latins, day)
+    except (RuntimeError, OSError, subprocess.TimeoutExpired) as exc:
+        print(f'  (oiseau rare ou non : {exc})', flush=True)
+        return None
+
+
+def mark_rare(db, seqs=None, dry=False):
+    """Tell again which described sequences are rare birds (rarity.py),
+    from their species and the region and day of their checklist: every one,
+    or those of `seqs`; the bar charts missing are asked through Safari
+    first. A sequence whose label changes is to be written again, and so is
+    one whose keywords held Claude's own "oiseau rare" (the label is the bar
+    charts'). dry: change nothing. Returns {'looked', 'rare', 'changed',
+    'open', 'found', 'failed'}: found, [(name, species, region, day, share)]
+    of the rare ones; failed, {region: why} of the bar charts not had."""
+    rows = db.execute(
+        'SELECT p.name, p.seq, p.species, p.latin, p.rare, p.keywords, p.written, c.state, c.day '
+        'FROM photos p LEFT JOIN checklists c ON c.sid = p.checklist '
+        'WHERE p.rep = 1 AND p.described IS NOT NULL').fetchall()
+    if seqs is not None:
+        wanted = set(seqs)
+        rows = [row for row in rows if row['seq'] in wanted]
+    failed = rarity.fetch_all(sorted({row['state'] for row in rows
+                                      if row['state'] and row['latin']}))
+    out = {'looked': 0, 'rare': 0, 'changed': 0, 'open': 0, 'found': [], 'failed': failed}
+    changed = []
+    for row in rows:
+        out['looked'] += 1
+        rare, share = None, None
+        if row['state'] and row['latin'] and row['state'] not in failed:
+            rare, share = rarity.assess(row['state'], rarity.wild(_pairs(row['species'], row['latin'])),
+                                        date.fromisoformat(row['day']))
+        out['open'] += rare is None
+        if rare == 1:
+            out['rare'] += 1
+            out['found'].append((row['name'], row['species'], row['state'], row['day'], share))
+        words = [word for word in (row['keywords'] or '').split(photoindex.SEP) if word]
+        kept = [word for word in words if photoindex.fold(word) != photoindex.fold(rarity.LABEL)]
+        if rare == row['rare'] and kept == words:
+            continue
+        out['changed'] += (rare == 1) != (row['rare'] == 1) or kept != words
+        if dry:
+            continue
+        again = (rare == 1) != (row['rare'] == 1) or kept != words
+        db.execute('UPDATE photos SET rare = ?, keywords = ?' + (", written = 'pending'" if again else '')
+                   + ' WHERE seq = ?', (rare, photoindex.SEP.join(kept), row['seq']))
+        changed.append(row['name'])
+    if not dry:
+        photoindex._derive(db, changed)
+    return out
+
+
 def settle(seq, answer, data):
     """what is kept of a sequence, from Claude's answer (None for a sequence
     it did not describe) and the eBird match: the columns its frames share,
@@ -508,7 +564,13 @@ def settle(seq, answer, data):
         sure.update(_place(checklist))
     if not answer:
         return sure, checklist
+    # (the label of a rare bird is the bar charts' to give, not Claude's)
+    answer['autres_mots_cles'] = [word for word in answer.get('autres_mots_cles') or []
+                                  if photoindex.fold(word) != photoindex.fold(rarity.LABEL)]
     if checklist:
+        sure['rare'] = _rare(checklist.state, rarity.wild(
+            [(sp.get('francais', ''), sp.get('latin', '')) for sp in answer.get('especes') or []]),
+            checklist.day)
         # what the photographer wrote in the checklist, summed up after the
         #   description (in the answer too, which the files may be given)
         summary = ' '.join(str(answer.get('resume_ebird') or '').split())
@@ -589,9 +651,12 @@ def file_tags(answer, kept, checklist, position=True):
         answer = dict(answer)
         if kept['note']:
             answer['description'] = f"{answer['description']} [eBird : {kept['note']}]"
-        words = list(answer.get('autres_mots_cles') or [])
+        words = [word for word in answer.get('autres_mots_cles') or []
+                 if photoindex.fold(word) != photoindex.fold(rarity.LABEL)]
         if kept['on_checklist'] == 0:
             words.append(OFFLIST)
+        if kept.get('rare') == 1:
+            words.append(rarity.LABEL)
         # the notes of a bird photo and the people named: keywords, and a
         #   place in the Lightroom hierarchy
         marks = [(label, stem, kept.get(column)) for column, _, label, stem in NOTES
@@ -694,7 +759,8 @@ def from_file(row):
     topic = (under('Sujet') or [''])[0]
     people = under('Personne') or _strings(row.get('PersonInImage'))
     notes = dict(item.rsplit('|', 1) for item in under('Qualité') if '|' in item)
-    known = set(species + latin + habitat + people + [topic, UNSURE, OFFLIST, BEST, VERIFIED]
+    known = set(species + latin + habitat + people + [topic, UNSURE, OFFLIST, BEST, VERIFIED,
+                                                      rarity.LABEL]
                 + [f'{stem} {n}/5' for _, _, _, stem in NOTES for n in range(1, 6)])
     description, _, note = str(row.get('Description') or '').partition(' [eBird : ')
     event = str(row.get('Event') or '')
@@ -724,6 +790,8 @@ def from_file(row):
         out['checklist'] = event.split()[1]
     if OFFLIST in subject:
         out['on_checklist'] = 0
+    if rarity.LABEL in subject:
+        out['rare'] = 1
     return out
 
 
@@ -1927,7 +1995,7 @@ def rematch():
                      'position': (row['lat'], row['lon']) if row['own_position']
                      and row['lat'] is not None else None})
     locate(seqs, data)
-    changed, dropped = [], 0
+    changed, moved, dropped = [], [], 0
     for seq in seqs:
         row = seq['row']
         kept, checklist = settle(seq, None, data)
@@ -1960,7 +2028,9 @@ def rematch():
                        "AND written != 'pending'", (row['seq'],))
             dropped += bool(row['checklist']) and not seq['anchored']
         changed.append(row['name'])
+        moved.append(row['seq'])
     photoindex._derive(db, changed)
+    mark_rare(db, moved)        # (another checklist: another region, another day)
     db.commit()
     db.close()
     print(f"Liste eBird ou horloge changée pour {_count(len(changed), 'séquence')} "
@@ -2253,6 +2323,8 @@ def correct_species(seq_id, old, new):
             'written': 'pending'}
         names = [frame['name'] for frame in photoindex.sequence(db, seq_id)]
         photoindex.put(db, [dict(changes, name=name) for name in names])
+        mark_rare(db, [seq_id])     # (another species or checklist, another status)
+        db.commit()
         return dict(db.execute('SELECT * FROM photos WHERE seq = ? AND rep = 1', (seq_id,)).fetchone())
     finally:
         db.close()
@@ -2386,6 +2458,8 @@ def attach(seq_id, sid=None):
                 changes.update(location='', county='', state='', country='', lat=None, lon=None)
         names = [frame['name'] for frame in photoindex.sequence(db, seq_id)]
         photoindex.put(db, [dict(changes, name=name) for name in names])
+        mark_rare(db, [seq_id])     # (another species or checklist, another status)
+        db.commit()
         return dict(db.execute('SELECT * FROM photos WHERE seq = ? AND rep = 1', (seq_id,)).fetchone())
     finally:
         db.close()
@@ -2938,6 +3012,15 @@ def main():
     p_sum.add_argument('--modele', default=None,
                        help='Le modèle de Claude (config summary_model, sonnet).')
 
+    p_rare = sub.add_parser(
+        'rares', help='Donner le mot-clé « oiseau rare » aux séquences décrites dont une espèce '
+                      'est rapportée sur moins de 0,5 %% des listes eBird de la région de leur '
+                      "liste à cette période de l'année (les histogrammes eBird ; ceux qui "
+                      'manquent sont demandés par Safari, une fois par région).')
+    p_rare.add_argument('--essai', action='store_true',
+                        help='Dire seulement quelles séquences seraient des oiseaux rares, sans '
+                             'rien changer.')
+
     p_app = sub.add_parser(
         'app', help="Faire l'application patchdoc et la mettre dans le Dock : un clic démarre "
                     "la page de recherche et l'ouvre.")
@@ -2996,6 +3079,22 @@ def main():
         print(f"Claude : {out['cost']:.2f} $ US au prix de l'API."
               + ('' if args.essai or not out['added'] else
                  ' Les fichiers seront récrits par la page de recherche (`patchdoc gui`).'))
+        return
+    if args.cmd == 'rares':
+        db = photoindex.connect()
+        out = mark_rare(db, dry=args.essai)
+        db.commit()
+        db.close()
+        for name, species, region, day, share in out['found']:
+            print(f'  {name} : {species} ({region}, {day}) : {100 * share:.2g} % des listes')
+        for region, why in out['failed'].items():
+            print(f'  {region} : {why}')
+        print(f"{out['rare']} oiseau{'x' * (out['rare'] > 1)} rare{'s' * (out['rare'] > 1)} sur "
+              f"{out['looked']} séquences décrites ; {out['open']} sans réponse (pas de liste eBird, "
+              "pas d'espèce, ou un nom qu'eBird ne connaît pas) ; "
+              + (f"{_count(out['changed'], 'séquence')} à changer." if args.essai else
+                 f"{_count(out['changed'], 'séquence')} changée{'s' * (out['changed'] > 1)}, dont les "
+                 'fichiers seront récrits par la page de recherche.'))
         return
     if args.cmd == 'app':
         from . import macapp

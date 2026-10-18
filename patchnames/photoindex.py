@@ -66,6 +66,9 @@ COLUMNS = ('name', 'path', 'stem', 'ext',
                                #   from the position of the photo), 'manual' (tied by hand),
                                #   'detached' (untied by hand)
            'on_checklist',     # 1: every species named is on the checklist, 0: one is not
+           'rare',             # 1: one of its species is rare in the region of its checklist at
+                               #   that time of the year (rarity.py), 0: none is; NULL when that
+                               #   cannot be told
            'location', 'county', 'state', 'country', 'lat', 'lon',
            'own_position',     # 1 when lat and lon are the position the photo carries itself
                                #   (a phone) and the place is named from it, not from the
@@ -82,7 +85,7 @@ COLUMNS = ('name', 'path', 'stem', 'ext',
 
 TYPES = {'clock_offset': 'REAL', 'zone': 'REAL', 'focal': 'REAL', 'lat': 'REAL', 'lon': 'REAL',
          'bird': 'INTEGER', 'seq_n': 'INTEGER', 'rep': 'INTEGER', 'on_checklist': 'INTEGER',
-         'own_position': 'INTEGER', 'turned': 'INTEGER', 'upright': 'INTEGER',
+         'own_position': 'INTEGER', 'turned': 'INTEGER', 'upright': 'INTEGER', 'rare': 'INTEGER',
          'eye':'INTEGER', 'clear': 'INTEGER', 'level': 'INTEGER', 'faces': 'INTEGER',
          'sharp': 'REAL', 'best': 'INTEGER', 'eye_x': 'REAL', 'eye_y': 'REAL'}
 
@@ -130,6 +133,8 @@ BIRDS = "(COALESCE(p.bird, 0) = 1 OR COALESCE(p.topic, '') = 'oiseau')"
 FAMILY = ("(COALESCE(p.topic, '') = 'personnes' OR COALESCE(p.people, '') != '' "
           "OR COALESCE(p.guessed, '') != '' OR COALESCE(p.faces, 0) > 0)")
 SEP = '; '
+#: the keyword of a rare bird (rarity.LABEL)
+RARE_LABEL = 'oiseau rare'
 
 
 def fold(text):
@@ -437,7 +442,11 @@ def _derive(db, names):
                 if value.strip():
                     db.execute('INSERT INTO tags VALUES (?, ?, ?, ?)',
                                (name, kind, value.strip(), fold(value)))
-        text = ' '.join(str(row[key] or '') for key in (
+        # (the label of a rare bird, a keyword of its files)
+        rare = RARE_LABEL if row['rare'] == 1 else ''
+        if rare:
+            db.execute('INSERT INTO tags VALUES (?, ?, ?, ?)', (name, 'keyword', rare, fold(rare)))
+        text = rare + ' ' + ' '.join(str(row[key] or '') for key in (
             'title', 'topic', 'description', 'species', 'latin', 'habitat', 'keywords', 'note',
             'people', 'guessed',
             'location', 'county', 'state', 'checklist', 'camera', 'lens', 'name'))
@@ -553,6 +562,8 @@ def _where(q='', species='', listed=False, place='', region='', year='', since='
         where.append("p.species != '' AND p.certainty IS NOT NULL AND p.certainty != 'sûre'")
     elif flag == 'offlist':
         where.append('p.on_checklist = 0')
+    elif flag == 'rare':
+        where.append('p.rare = 1')
     elif flag == 'described':
         where.append('p.described IS NOT NULL')
     elif flag == 'undescribed':

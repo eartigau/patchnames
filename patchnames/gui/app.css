@@ -679,6 +679,12 @@ button:focus-visible,
   border-color: rgba(108, 226, 173, 0.45);
 }
 
+.mark.rare,
+.badge.rare {
+  color: #d9b2ff;
+  border-color: rgba(217, 178, 255, 0.55);
+}
+
 #more {
   height: 1px;
 }
