@@ -30,10 +30,12 @@ The page (gui/index.html, app.js) asks for:
     /api/orphans             (POST) compare two copies file by file for the
                              files only one has (sync.orphans), or show the
                              list found last in the Finder
-    /api/inbox               the photos that wait to be sent to the archive;
-                             (POST) look at their folders again
-    /api/inbox/act           (POST) put their hours right, name them, or send
-                             them to the archive (inbox.py)
+    /api/inbox               the photos that wait to be sent to the archive,
+                             and the memory cards in this machine; (POST)
+                             look at their folders again
+    /api/inbox/act           (POST) copy to them what is new on a memory card
+                             (card.py), put their hours right, name them, or
+                             send them to the archive (inbox.py)
     /api/inbox/stop          (POST) end that after the file under way
     /api/backup              the backup of the index on GitHub; (POST) make
                              one and send it (backup.py)
@@ -72,11 +74,14 @@ limit, the network or the drive gone) waits and tries again instead of
 failing all it has left, and a sequence that failed is tried once more after
 Claude has answered again.
 
-When the page shows the photos that wait to be sent to the archive, three
-buttons act on their files (inbox.py), one at a time and in the background:
-the hour the index found for the photos whose camera clock was off is
-written into them, every file takes its canonical name, and they are moved
-to the archive in use, each to its folder. The index follows the files.
+When the page shows the photos that wait to be sent to the archive, its
+buttons act on their files, one at a time and in the background: what is
+new on the memory card of a camera put in this machine is copied to them
+(card.py; the card is read as soon as the page sees it, and what it brought
+is read into the index once copied), the hour the index found for the
+photos whose camera clock was off is written into them, every file takes
+its canonical name, and they are moved to the archive in use, each to its
+folder (inbox.py). The index follows the files.
 
 "Regarder" also names each copy of the archive when it has several: a click
 on one makes it the copy the page reads and writes, and shows what it holds,
@@ -162,10 +167,14 @@ _orphans = {'state': 'idle'}
 #: the listing of what each copy of the archive holds (doc.index_copy), {root:
 #:  {'state': 'reading', 'done' or 'error', and what was found}}
 _looks = {}
-#: what a button of those photos is doing to them (inbox.py): 'idle',
-#:  'running', 'done' or 'error', with what ('times', 'names' or 'send') and
-#:  its counts; _act_stop ends it after the file under way
+#: what a button of those photos is doing to them (inbox.py, card.py):
+#:  'idle', 'running', 'done' or 'error', with what ('card', 'times', 'names'
+#:  or 'send') and its counts; _act_stop ends it after the file under way
 _act, _act_stop = {'state': 'idle'}, threading.Event()
+#: the memory cards in this machine (card.py), {root: what the last look at
+#:  it found: 'state' 'reading', 'done' or 'error', its counts, and 'sig',
+#:  its files then}; a card whose files changed is looked at again
+_cards = {}
 #: sequences of a batch done at the same time (each reads and rewrites files
 #:  of the archive)
 BATCH_JOBS = 2
@@ -309,7 +318,55 @@ def _inbox_status():
         act['seconds'] = round((act.get('ended') or time.time()) - act['started'])
     return dict(_inbox, dirs=[folder.replace(home, '~', 1) for folder in inbox_dirs()],
                 files=len(inbox_files()), photos=indexed[0], sequences=indexed[1],
-                plan=inbox.plan(), act=act, copies=_copies()['copies'])
+                plan=inbox.plan(), act=act, copies=_copies()['copies'], cards=_cards_status())
+
+
+def _cards_status():
+    """the memory cards in this machine as the page gets them; a card put in,
+    or whose files changed, is looked at in the background (_card_look)"""
+    from . import card
+    roots, out = card.cards(), []
+    for root in roots:
+        look = _cards.get(root)
+        again = look is None
+        if look is not None and look['state'] != 'reading':
+            try:
+                again = hash(tuple(card.files(root))) != look['sig']
+            except OSError:
+                continue        # (taken out while it was listed)
+        if again:
+            with _lock:
+                # (another call may have started it meanwhile)
+                look = _cards.get(root)
+                again = look is None or look['state'] != 'reading'
+                if again:
+                    look = _cards[root] = {'state': 'reading', 'sig': None, 'read': 0, 'total': 0}
+            if again:
+                threading.Thread(target=_card_look, args=(root,), daemon=True).start()
+        out.append(dict({key: value for key, value in look.items() if key != 'sig'},
+                        root=root, name=card.name_of(root), free=card.free(), keep=card.ROOM))
+    with _lock:
+        for root in set(_cards) - set(roots):
+            del _cards[root]
+            card.forget(root)
+    return out
+
+
+def _card_look(root):
+    """look at what a card holds, and what of it is new (card.look)"""
+    from . import card
+    look = _cards.get(root)
+    if look is None:
+        return
+    look.update(state='reading', read=0, total=0, error='')
+    try:
+        # (the first listing of a card takes seconds: it is done here)
+        look['sig'] = hash(tuple(card.files(root)))
+        found = card.look(root, tell=lambda done, total: look.update(read=done, total=total))
+        found.pop('todo')
+        look.update(found, state='done')
+    except Exception as exc:
+        look.update(state='error', error=str(exc))
 
 
 def _inbox_job():
@@ -336,20 +393,31 @@ def _holding(seq):
 
 
 def _act_start(what, root=None):
-    """start one of the three actions on the photos that wait: 'times',
-    'names' or 'send' (to the copy of the archive `root`, the one in use
-    without it); why not, when it cannot start"""
-    if what not in ('times', 'names', 'send'):
+    """start one of the actions on the photos that wait: 'card' (copy to
+    them what is new on the memory card `root`), 'times', 'names' or 'send'
+    (to the copy of the archive `root`, the one in use without it); why not,
+    when it cannot start"""
+    if what not in ('card', 'times', 'names', 'send'):
         return 'action inconnue'
-    root = (root or _archive()['mounted']) if what == 'send' else None
+    if what == 'card':
+        from . import card
+        if root not in card.cards():
+            return "Cette carte n'est plus branchée."
+    else:
+        root = (root or _archive()['mounted']) if what == 'send' else None
     if what == 'send' and (root not in photoindex.roots() or not os.path.isdir(root)):
         return "Cette copie de l'archive n'est pas montée : rien ne peut y être envoyé."
-    db = _db()
-    waiting = {row[0] for row in db.execute("SELECT DISTINCT seq FROM photos WHERE path LIKE '/%'")}
-    db.close()
+    waiting = set()
+    if what != 'card':
+        # (a copy from a card leaves the photos that are there as they are)
+        db = _db()
+        waiting = {row[0] for row in db.execute("SELECT DISTINCT seq FROM photos WHERE path LIKE '/%'")}
+        db.close()
     with _lock:
         if _act.get('state') == 'running' or _inbox.get('state') == 'reading':
             return 'Une action est déjà en cours sur ces photos.'
+        if what == 'card' and (_cards.get(root) or {}).get('state') != 'done':
+            return "La carte n'a pas fini d'être lue : attendez un instant."
         asked = (set(_batch['waiting']) | set(_batch['active']) | set(_batch['retry'])
                  | {seq for seq, job in _jobs.items() if job.get('state') in ('running', 'writing')})
         if waiting & asked:
@@ -366,19 +434,32 @@ def _act_start(what, root=None):
 
 
 def _act_job(what, root=None):
-    """one of the three actions on the photos that wait, with its counts as
-    it goes"""
+    """one of the actions on the photos that wait, with its counts as it
+    goes; what a card brought is then read into the index, as a click on
+    the photos that wait does"""
     from . import inbox
     from .doc import index_inbox
     try:
-        index_inbox()       # (the index has every photo that waits, to follow it)
-        where = {'root': root} if what == 'send' else {}
-        found = getattr(inbox, what)(tell=_act.update, stop=_act_stop, hold=_holding, **where)
+        if what == 'card':
+            from . import card
+            found = card.copy(root, tell=_act.update, stop=_act_stop)
+            _card_look(root)    # (what is still new on it)
+        else:
+            index_inbox()       # (the index has every photo that waits, to follow it)
+            where = {'root': root} if what == 'send' else {}
+            found = getattr(inbox, what)(tell=_act.update, stop=_act_stop, hold=_holding, **where)
         _act.update(found, state='done', stopped=_act_stop.is_set(), ended=time.time())
     except Exception as exc:
         _act.update(state='error', error=str(exc), ended=time.time())
     finally:
         _wake.set()         # (what waited to be written into these files may be now)
+    if what == 'card':
+        with _lock:
+            read = _act.get('state') != 'running' and _inbox.get('state') != 'reading'
+            if read:
+                _inbox.update(state='reading', read=0, total=0, error='')
+        if read:
+            _inbox_job()
 
 
 def _copies():

@@ -507,10 +507,29 @@ async function showInbox(data) {
   const act = data.act || {};
   if (act.state === "running" && data.state !== "reading") inbox.timer = setTimeout(showInbox, 1000);
   else if (look.state === "reading" && data.state !== "reading") inbox.timer = setTimeout(showInbox, 1500);
+  else if (where === "attente" && data.state !== "reading") {
+    const reading = (data.cards || []).some((card) => card.state === "reading");
+    inbox.timer = setTimeout(reading ? showInbox : watchCards, reading ? 1500 : 5000);
+  }
+  inbox.cards = cardsSeen(data);
   if (shown && look.state === "done" && inbox.looked === "reading") load(true);     // what the copy was just found to hold
   inbox.looked = shown ? look.state : "";
   if (act.state !== "running" && inbox.acted === "running") load(true);  // the files changed name or place
   inbox.acted = act.state;
+}
+
+// while the page shows the photos that wait, a memory card put in or taken
+// out changes its buttons: the server is asked every few seconds, and the
+// page is drawn again only when that changed (or what it was doing ended)
+const cardsSeen = (data) => (data.cards || []).map((card) => [card.root, card.state, card.new].join("|")).join(";");
+
+async function watchCards() {
+  if ($("place_of").value !== "attente") return;
+  let data;
+  try { data = await (await fetch("/api/inbox")).json(); } catch (err) { return; }
+  if ($("place_of").value !== "attente") return;
+  if (cardsSeen(data) !== inbox.cards || data.state !== inbox.was || (data.act || {}).state !== inbox.acted) return showInbox(data);
+  inbox.timer = setTimeout(watchCards, 5000);
 }
 
 // show what a copy of the archive holds: the page reads and writes on that
@@ -532,9 +551,10 @@ async function lookAt(copy) {
   load(true);
 }
 
-// the three buttons of the photos that wait: put their hours right, name
-// them, send them to the archive. A first click says what a second one does;
-// the work is done by the server, one action at a time, with a bar.
+// the buttons of the photos that wait: copy them from the memory card of a
+// camera, put their hours right, name them, send them to the archive. A
+// first click says what a second one does; the work is done by the server,
+// one action at a time, with a bar.
 function showActions(data, shown) {
   const plan = data.plan, act = data.act || {};
   $("inboxActions").hidden = !shown || !plan;       // (a server from before this has no plan)
@@ -551,7 +571,8 @@ function showActions(data, shown) {
       return showActions(data, shown);
     }
     inbox.armed = "";
-    const [action, root] = what.split("|");
+    const cut = what.indexOf("|");
+    const action = cut < 0 ? what : what.slice(0, cut), root = cut < 0 ? "" : what.slice(cut + 1);
     const reply = await post("/api/inbox/act", root ? { what: action, root } : { what: action });
     if (!reply.dirs) return;
     await showInbox(reply);
@@ -564,7 +585,29 @@ function showActions(data, shown) {
   const button = (what, text, confirm, title, can) => el("button", {
     class: "pill" + (can && !running ? " go" : ""), type: "button", disabled: (running || !can) && "disabled",
     text: armed(what) ? confirm : text, title, onclick: () => go(what) });
+  // one button for each memory card in this machine: what is new on it comes
+  // to the photos that wait (the server reads a card as soon as it sees it)
+  const cards = (data.cards || []).map((card) => {
+    const room = card.free - card.new_bytes >= (card.keep || 0);
+    const already = (card.known || 0) + (card.copied || 0) + (card.there || 0);
+    return button("card|" + card.root,
+      card.state === "reading" ? `Lecture de la carte ${card.name}…`
+          + (card.total ? ` ${number(card.read)} sur ${number(card.total)}` : "")
+        : card.state === "error" ? `La carte ${card.name} n'a pas pu être lue`
+        : !card.new ? `Rien de nouveau sur la carte ${card.name}`
+        : !room ? `Pas assez de place pour la carte ${card.name} : ${size(card.new_bytes)}, il reste ${size(card.free)}`
+        : `Copier de la carte ${card.name} : ${plural(card.new, "fichier", "fichiers")} (${size(card.new_bytes)})`,
+      `Confirmer : ${plural(card.new, "fichier copié", "fichiers copiés")} de la carte vers ${card.to}`,
+      card.state === "error" ? card.error
+        : `Copier dans ${card.to} les photos et vidéos de la carte ${card.name} que la base n'a pas encore, avec le nom `
+          + "qu'elles ont sur la carte (les boutons suivants les mettent à l'heure, les renomment et les archivent). "
+          + (already ? `${plural(already, "fichier de la carte est déjà copié", "fichiers de la carte sont déjà copiés")} `
+            + `(dans ${card.to} ou dans l'archive, même mis à l'heure depuis) : ${already > 1 ? "ils ne le seront" : "il ne le sera"} pas deux fois. ` : "")
+          + `Rien n'est effacé de la carte ni écrasé dans ${card.to}. Il reste ${size(card.free)} sur ce disque.`,
+      card.state === "done" && card.new > 0 && room);
+  });
   const buttons = [
+    ...cards,
     button("times",
       plan.retime ? `Mettre à jour les heures : ${plural(plan.retime, "photo", "photos")} (${clocks})` : "Les heures sont à jour",
       `Confirmer : heure corrigée dans ${plural(plan.retime, "fichier", "fichiers")} (${clocks}), et noms refaits`,
@@ -595,9 +638,12 @@ function showActions(data, shown) {
     + (act.problems || []).join(" ; ") + (act.left > (act.problems || []).length ? " ; …" : "") + "." : "";
   let text = "", share = 0;
   if (running) {
-    share = act.what === "send" && act.all ? act.bytes / act.all : act.total ? act.done / act.total : 0;
+    share = (act.what === "send" || act.what === "card") && act.all ? act.bytes / act.all
+      : act.total ? act.done / act.total : 0;
     const ahead = share > 0 && act.seconds >= 10 ? "reste environ " + clock(act.seconds * (1 - share) / share) : "";
-    text = (act.what === "times" ? [`Mise à l'heure : ${number(act.done)} sur ${plural(act.total, "photo", "photos")}`]
+    text = (act.what === "card" ? [`Copie de la carte ${act.card || ""} : ${number(act.done)} sur ${plural(act.total, "fichier", "fichiers")}`,
+                                   act.all ? `${size(act.bytes)} sur ${size(act.all)}` : ""]
+      : act.what === "times" ? [`Mise à l'heure : ${number(act.done)} sur ${plural(act.total, "photo", "photos")}`]
       : act.what === "names" ? [`Noms : ${number(act.done)} sur ${plural(act.total, "fichier", "fichiers")}`,
                                 `${number(act.renamed || 0)} renommés`]
       : [`Envoi vers ${act.to || "l'archive"} : ${number(act.done)} sur ${plural(act.total, "fichier", "fichiers")}`,
@@ -606,7 +652,9 @@ function showActions(data, shown) {
   } else if (act.state === "error") {
     text = "L'action a échoué : " + act.error;
   } else if (act.state === "done") {
-    text = (act.what === "times" ? `${plural(act.done, "photo mise", "photos mises")} à l'heure, ${number(act.renamed)} renommées.`
+    text = (act.what === "card" ? `${plural(act.copied, "fichier copié", "fichiers copiés")} de la carte ${act.card} vers ${act.to} en ${clock(act.seconds || 0)}.`
+        + (act.there ? ` ${plural(act.there, "autre y était", "autres y étaient")} déjà.` : "")
+      : act.what === "times" ? `${plural(act.done, "photo mise", "photos mises")} à l'heure, ${number(act.renamed)} renommées.`
       : act.what === "names" ? `${plural(act.renamed, "fichier renommé", "fichiers renommés")} sur ${number(act.total)} ; les autres avaient déjà leur nom.`
       : `${plural(act.sent, "fichier envoyé", "fichiers envoyés")} vers l'archive ${act.to} en ${clock(act.seconds || 0)}.`)
       + (act.stopped ? " Arrêté avant la fin." : "") + left;

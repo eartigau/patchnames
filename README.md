@@ -567,7 +567,7 @@ l'appel à Claude le demandent.
   ces photos relit les dossiers et ajoute à la base ce qui est nouveau,
   sans rien renommer ni déplacer. Elles s'identifient, se notent et se
   corrigent alors comme celles de l'archive, et ce qui est dit est écrit
-  dans leurs fichiers là où ils sont. Ensuite les trois boutons ci-dessous,
+  dans leurs fichiers là où ils sont. Ensuite les boutons ci-dessous,
   ou `patchdoc` lancé dans leur dossier, les renomment et les archivent avec
   ce qui a été noté, sans rappeler Claude ; la base suit. Une photo dont la
   base a déjà le nom ailleurs est laissée de côté.
@@ -624,10 +624,29 @@ l'appel à Claude le demandent.
 - **Le sablier.** Dans la visionneuse, une vue dont l'aperçu n'est pas
   encore gardé est lue dans la photo elle-même, ce qui prend un moment sur
   un disque réseau : un sablier le dit, sur la vue d'avant assombrie.
-- **Heures, noms, envoi vers l'archive.** Quand la page montre ces photos
-  qui attendent, trois boutons agissent sur leurs fichiers, un à la fois et
-  en arrière-plan, avec une barre de progression ; un premier clic dit ce
-  que le second fera.
+- **Carte mémoire, heures, noms, envoi vers l'archive.** Quand la page
+  montre ces photos qui attendent, des boutons agissent sur leurs fichiers,
+  un à la fois et en arrière-plan, avec une barre de progression ; un
+  premier clic dit ce que le second fera.
+  - « Copier de la carte … » : un bouton pour chaque carte mémoire dans
+    l'ordinateur (un volume de `/Volumes` qui a un dossier `DCIM`, autre
+    qu'un disque de l'archive). La page lit la carte dès qu'elle la voit
+    (une demi-minute pour 2 000 NEF ; tant qu'elle montre ces photos, elle
+    voit une carte arriver ou partir en quelques secondes) et le bouton dit
+    combien de ses fichiers sont nouveaux. Il les copie dans `~/photo` (le
+    premier dossier de `inbox_dirs`) sous le nom qu'ils ont sur la carte,
+    avec leur date, puis la base les lit, comme un clic sur `~/photo`. Un
+    fichier n'est pas copié une seconde fois : quand le bouton l'a déjà
+    copié (la base garde une trace de chacun, table `from_card`, si bien
+    qu'une photo effacée depuis ne revient pas) ; quand la base a une photo
+    du même propriétaire, du même numéro et de la même extension, prise à
+    un nombre entier de quarts d'heure de l'heure de l'appareil, 14 h au
+    plus (les photos copiées à la main avant ce bouton, et celles mises à
+    l'heure depuis, dont le nom a changé avec l'heure) ; ou quand `~/photo`
+    a déjà un fichier de ce nom et de cette taille. Rien n'est effacé de la
+    carte. La base n'a pas les vidéos : une vidéo copiée à la main avant ce
+    bouton le serait de nouveau. La copie ne part pas si elle laisserait
+    moins de 2 Go libres sur le disque.
   - « Mettre à jour les heures » écrit dans les fichiers l'heure que
     `patchdoc` a trouvée d'après vos listes eBird pour les photos dont
     l'horloge de l'appareil était décalée (le bouton dit de combien, et
@@ -652,8 +671,9 @@ l'appel à Claude le demandent.
   dont le nom est déjà pris, sur place ou dans l'archive, est laissé où il
   est, et la page le dit. La base suit chaque fichier, avec sa description,
   ses notes et ses vignettes. Ce qui est fait est ajouté à `inbox.log`,
-  dans le dossier de la base. Ces boutons attendent que Claude ait fini
-  d'identifier ces photos.
+  dans le dossier de la base. Ces boutons, sauf celui de la carte, qui ne
+  touche pas aux photos déjà là, attendent que Claude ait fini d'identifier
+  ces photos.
 - **La loupe sur l'œil.** Une photo d'oiseau dont l'œil a été trouvé porte
   une petite icône de loupe : sur sa tuile, sur la photo de la visionneuse
   et sur chaque vue de la bande. Le curseur sur cette icône (ou un clic)
