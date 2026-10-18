@@ -12,7 +12,7 @@ const FIELDS = ["section", "place_of", "q", "species", "person", "place", "regio
                 "eye", "clear", "level", "flag", "sort"];
 const PAGE = 60;
 const state = { items: [], offset: 0, done: false, loading: false, token: 0, current: -1, checklist: "", total: 0,
-                frames: [], versions: {}, days: {} };
+                frames: [], versions: {}, days: {}, inStrip: false };
 // (state.days: the eBird checklists of each day asked for, to tie a photo to one)
 // (state.versions: for the photos whose pictures were made again another way
 // up, how many times: their addresses change, past what the browser kept)
@@ -1071,9 +1071,11 @@ async function loadStrip(photo, index) {
     const cell = el("div", {
       class: "frame" + (frame.best ? " best" : ""),
       title: [frame.name, rated && said, frame.best && "Meilleure vue de la rafale",
-              rated && frame.sharp && `Netteté mesurée sur l'œil : ${Math.round(100 * frame.sharp)} % de la vue la plus nette`]
+              rated && frame.sharp && `Netteté mesurée sur l'œil : ${Math.round(100 * frame.sharp)} % de la vue la plus nette`,
+              "Après un clic ici, ← et → passent d'une vue à l'autre de la séquence (Maj + flèche : d'une séquence à l'autre)"]
         .filter(Boolean).join("\n"),
-      onclick: () => show(frame.name),
+      // (from then on the arrows go from frame to frame: see the keys below)
+      onclick: () => { state.inStrip = true; show(frame.name); },
     }, img, rated && el("span", { class: "notes", text: (frame.best ? "★ " : "")
       + NOTES.map(([key]) => frame[key] || "·").join(" ") }));
     cell.dataset.name = frame.name;
@@ -1095,6 +1097,7 @@ async function openViewer(index) {
   document.body.style.overflow = "hidden";
   $("viewerStrip").replaceChildren();
   state.frames = [];
+  state.inStrip = false;        // (the arrows go from sequence to sequence)
   $("viewerImg").alt = photo.title || photo.name;
   show(photo.name);
   $("viewerInfo").replaceChildren(...info(photo));
@@ -1111,6 +1114,17 @@ function closeViewer() {
   document.body.style.overflow = "";
   state.current = -1;
   history.replaceState(null, "", "?" + query());
+}
+
+// the frame before or after the one on screen, in the order of the strip
+// (the first and the last stay where they are)
+function stepFrame(by) {
+  const cells = [...$("viewerStrip").children];
+  const at = cells.findIndex((cell) => cell.dataset.name === state.shown);
+  const next = at < 0 ? null : cells[Math.max(0, Math.min(at + by, cells.length - 1))];
+  if (!next || next.dataset.name === state.shown) return;
+  show(next.dataset.name);
+  next.scrollIntoView({ block: "nearest", inline: "nearest" });
 }
 
 async function step(by) {
@@ -1800,9 +1814,14 @@ async function start() {
   $("viewer").addEventListener("click", (event) => { if (event.target === $("viewer")) closeViewer(); });
   document.addEventListener("keydown", (event) => {
     if ($("viewer").hidden) return;
-    if (event.key === "Escape") closeViewer();
-    else if (event.key === "ArrowLeft") step(-1);
-    else if (event.key === "ArrowRight") step(1);
+    if (event.key === "Escape") return closeViewer();
+    // (not while a name is being typed)
+    if (!["ArrowLeft", "ArrowRight"].includes(event.key) || event.target.closest("input, textarea, select")) return;
+    const by = event.key === "ArrowLeft" ? -1 : 1;
+    // once a frame of the strip was clicked, from frame to frame of the
+    // sequence; before that, or with Shift, from sequence to sequence
+    if (state.inStrip && !event.shiftKey && $("viewerStrip").children.length > 1) stepFrame(by);
+    else step(by);
   });
 
   new IntersectionObserver((entries) => {

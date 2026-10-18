@@ -186,6 +186,11 @@ du lot :
 - Dans la visionneuse, chaque vue de la bande porte ses trois notes (œil,
   dégagé, hauteur ; un point quand il n'y en a pas) et une étoile marque la
   meilleure ; les notes affichées suivent la vue à l'écran.
+- Les flèches ← et → du clavier passent d'une séquence à l'autre. Après un
+  clic sur une vue de la bande, elles passent d'une vue à l'autre de la
+  séquence, dans l'ordre de la bande (Maj + flèche : toujours d'une
+  séquence à l'autre), jusqu'à ce qu'une autre séquence soit ouverte. Elles
+  ne font rien pendant qu'un nom est tapé.
 
 Ce qu'il faut en savoir :
 
