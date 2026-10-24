@@ -337,6 +337,29 @@ async function orientGo() {
   showOrient(await post("/api/orient", { go: true }));
 }
 
+// what the server is doing in the background, at the top of the page: what
+// calls Claude is marked, and comes with a button that stops it
+const running = { timer: null };
+
+async function showRunning() {
+  clearTimeout(running.timer);
+  let data;
+  try { data = await (await fetch("/api/running")).json(); } catch (err) { data = null; }
+  if (data && Array.isArray(data.jobs)) {
+    $("running").hidden = !data.jobs.length;
+    $("runningList").replaceChildren(...data.jobs.map((job) => el("span", { class: "job" + (job.claude ? " claude" : "") },
+      ...(job.claude ? [el("span", { class: "who", text: "Claude", title: "Ce travail appelle Claude : il compte dans votre allocation" })] : []),
+      el("span", { text: job.text }),
+      ...(job.stop ? [el("button", { class: "pill", type: "button", text: "Arrêter",
+        onclick: async () => {
+          await post(job.stop.path, job.stop.body);
+          showRunning(); watchBatch(); showOrient(); showArchive(); showInbox();
+        } })] : []))));
+  }
+  // (a server from before this has no such list: the strip stays hidden)
+  if (data && Array.isArray(data.jobs)) running.timer = setTimeout(showRunning, 4000);
+}
+
 // seconds as a clock: 75 -> "1:15", 3700 -> "1 h 01"
 function clock(seconds) {
   seconds = Math.max(0, Math.round(seconds));
@@ -1854,6 +1877,7 @@ async function start() {
   showInbox();
   showBackup();
   showOrient();
+  showRunning();
 }
 
 start().catch((err) => { $("status").textContent = "La page n'a pas pu démarrer : " + err.message; });

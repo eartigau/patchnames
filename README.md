@@ -737,6 +737,12 @@ l'appel à Claude le demandent.
 - **Le sablier.** Dans la visionneuse, une vue dont l'aperçu n'est pas
   encore gardé est lue dans la photo elle-même, ce qui prend un moment sur
   un disque réseau : un sablier le dit, sur la vue d'avant assombrie.
+- **Ce qui tourne.** En haut du panneau, la ligne « En cours » dit ce que
+  la page fait en arrière-plan : descriptions, redressement, écriture dans
+  les fichiers, copies, vignettes, visages. Ce qui appelle Claude, et
+  compte donc dans votre allocation, est marqué « Claude » et a son bouton
+  « Arrêter ». Quand Claude refuse de répondre (limite d'usage atteinte),
+  la ligne donne sa phrase, qui dit quand la limite se lève.
 - **Carte mémoire, heures, noms, envoi vers l'archive.** Quand la page
   montre ces photos qui attendent, des boutons agissent sur leurs fichiers,
   un à la fois et en arrière-plan, avec une barre de progression ; un

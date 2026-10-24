@@ -1300,7 +1300,13 @@ def ask_claude(prompt, tmpdir, model=None, effort=None, tries=2, schema=None, sy
         try:
             res = subprocess.run(cmd, capture_output=True, text=True, timeout=900, cwd=tmpdir)
             if res.returncode != 0:
-                raise RuntimeError(f'claude a échoué : {(res.stderr or res.stdout).strip()[:300]}')
+                # (what claude says of it, the usage limit and when it lifts for
+                #   one, is the 'result' of its answer)
+                try:
+                    said = str(json.loads(res.stdout).get('result') or '')
+                except (ValueError, AttributeError):
+                    said = ''
+                raise RuntimeError(f'claude a échoué : {(said or res.stderr or res.stdout).strip()[:300]}')
             out = json.loads(res.stdout)
             answer = out.get('structured_output')
             if not isinstance(answer, dict):

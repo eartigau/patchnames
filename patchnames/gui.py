@@ -27,6 +27,8 @@ The page (gui/index.html, app.js) asks for:
     /api/archive             the copies of the archive, and the copy from one
                              to another
     /api/archive/look        (POST) use a copy, and list what it holds
+    /api/running             what the server is doing in the background, and
+                             whether it calls Claude
     /api/orphans             (POST) compare two copies file by file for the
                              files only one has (sync.orphans), or show the
                              list found last in the Finder
@@ -473,6 +475,75 @@ def _copies():
             'sync': state, 'orphans': _orphans_status()}
 
 
+def _running():
+    """what the server is doing in the background, for the strip at the top
+    of the page: [{'what', 'text', 'claude': whether it calls Claude, 'stop':
+    the request that stops it, or None}], those that call Claude first"""
+    out = []
+    n = lambda value: f'{int(value or 0):,}'.replace(',', '\u00a0')
+
+    def say(what, text, claude=False, stop=None):
+        out.append({'what': what, 'text': text, 'claude': claude, 'stop': stop})
+
+    with _lock:
+        batch = dict(_batch, waiting=len(_batch['waiting']), active=len(_batch['active']),
+                     retry=len(_batch['retry']))
+        alone = sum(1 for seq, job in _jobs.items()
+                    if job.get('state') == 'running' and seq not in _batch['active'])
+    if batch['waiting'] or batch['active']:
+        text = (f"Claude décrit {'toute l’archive' if batch['archive'] else 'une série'} : "
+                f"{n(batch['done'])} sur {n(batch['total'])} séquences faites, "
+                f"{n(batch['active'])} en cours")
+        wait = round((batch['until'] - time.time()) / 60)
+        if wait > 0:
+            text += f", en pause encore {wait} min ({batch['why'][:120]})"
+        say('batch', text, True, {'path': '/api/batch/stop', 'body': {}})
+    if alone:
+        say('describe', f"Claude décrit {alone} séquence{'s' if alone > 1 else ''} demandée"
+                        f"{'s' if alone > 1 else ''} dans la page", True)
+    if _orient.get('state') == 'running':
+        say('orient', f"Claude redresse les photos couchées : {n(_orient.get('looked', 0))} "
+                      f"séquences regardées, {n(_orient.get('turned', 0))} tournées", True,
+            {'path': '/api/orient', 'body': {'go': False}})
+    if _writes.get('waiting') or _writes.get('seq'):
+        say('write', f"Écriture dans les fichiers : {n(_writes.get('waiting', 0))} séquences à écrire")
+    if _sync.get('state') in ('planning', 'running', 'backup'):
+        names = f"{_sync.get('from_name')} → {_sync.get('to_name')}"
+        say('sync', {'planning': f'Comparaison avant copie, {names}',
+                     'running': f'Copie {names} : {n(_sync.get("copied"))} fichiers sur '
+                                f'{n(_sync.get("files"))}',
+                     'backup': 'Copie de la base sur les disques'}[_sync['state']],
+            stop={'path': '/api/sync/stop', 'body': {}})
+    if _orphans.get('state') == 'running':
+        say('orphans', f"Recherche des orphelins : {n(_orphans.get('seen', 0))} fichiers listés")
+    for root, look in list(_looks.items()):
+        if look.get('state') == 'reading':
+            say('look', f'Lecture de ce que contient {sync.name_of(root)}')
+    if _inbox.get('state') == 'reading':
+        say('inbox', f"Lecture des photos en attente : {n(_inbox.get('read', 0))} sur "
+                     f"{n(_inbox.get('total', 0))}")
+    if _act.get('state') == 'running':
+        said = {'card': 'Copie de la carte mémoire', 'times': 'Mise à jour des heures',
+                'names': 'Renommage', 'send': "Envoi vers l'archive"}.get(_act.get('what'), 'Travail')
+        say('act', f"{said} : {n(_act.get('done', 0))} sur {n(_act.get('total', 0))}",
+            stop={'path': '/api/inbox/stop', 'body': {}})
+    for root, card in list(_cards.items()):
+        if card.get('state') == 'reading':
+            say('card', f'Lecture de la carte {os.path.basename(root)}')
+    if _backup.get('state') == 'running':
+        say('backup', 'Sauvegarde de la base sur GitHub')
+    straight = _store.get('straight') or {}
+    if straight.get('left'):
+        say('straight', f"Vignettes remises debout : {n(straight.get('checked'))} sur "
+                        f"{n(straight.get('checked', 0) + straight['left'])}")
+    if _store.get('filling'):
+        say('thumbs', f"Vignettes : {n(_store['have'])} sur {n(_store['total'])}")
+    seen = _store.get('faces') or {}
+    if seen.get('total') and seen['done'] < seen['total']:
+        say('faces', f"Visages cherchés : {n(seen['done'])} sur {n(seen['total'])} photos")
+    return sorted(out, key=lambda job: not job['claude'])
+
+
 def _orphans_status():
     """how the look for orphans goes, and what it found last"""
     state = dict(_orphans)
@@ -728,6 +799,7 @@ def _fill(stop):
     def faces_of(name):
         if ready():
             _faces(name)
+            _store['faces']['done'] += 1
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         list(pool.map(make, todo))
@@ -739,6 +811,7 @@ def _fill(stop):
                 'SELECT name FROM photos WHERE rep = 1 AND faces IS NULL AND COALESCE(bird, 0) = 0 '
                 "AND COALESCE(topic, '') != 'oiseau' ORDER BY COALESCE(local, taken) DESC")]
             db.close()
+            _store['faces'] = {'done': 0, 'total': len(unseen)}
             list(pool.map(faces_of, unseen))
 
 
@@ -1225,6 +1298,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, _backup_status())
             elif url.path == '/api/orient':
                 self._send(200, _orient_status())
+            elif url.path == '/api/running':
+                self._send(200, {'jobs': _running()})
             elif url.path == '/api/faces':
                 self._send(200, _faces(os.path.basename(args.get('name', ''))))
             else:
