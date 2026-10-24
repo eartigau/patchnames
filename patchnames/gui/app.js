@@ -885,9 +885,21 @@ function showOrphans(data) {
   const status = $("orphansStatus");
   status.replaceChildren(text);
   if (!running && last.copies && job.state !== "error") {
+    // (how old that comparison is: the copies change with every copy and every new photo)
+    const days = Math.floor((Date.now() - new Date(last.when.replace(" ", "T"))) / 86400000);
+    if (days >= 1) status.append(` Comparaison faite il y a ${plural(days, "jour", "jours")}.`);
     status.append(" ", el("a", { href: "#", text: "Voir la liste",
                                  title: "La liste de chaque fichier, dans le Finder (orphelins.tsv, dans le dossier de la base)",
                                  onclick: (event) => { event.preventDefault(); post("/api/orphans", { show: true }); } }));
+  }
+  if (!running) {
+    // a new comparison, right where the last one is said
+    const both = data.copies.filter((copy) => copy.mounted).length >= 2;
+    status.append(last.copies ? " · " : "", both
+      ? el("a", { href: "#", text: last.copies ? "Refaire la comparaison" : "Comparer les deux copies",
+                  title: "Comparer maintenant les deux copies fichier par fichier (moins d'une minute et demie) ; rien n'est déplacé ni copié",
+                  onclick: (event) => { event.preventDefault(); archiveDo("/api/orphans", {}); } })
+      : el("span", { text: "branchez les deux copies pour refaire la comparaison" }));
   }
   return running;
 }

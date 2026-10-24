@@ -48,11 +48,12 @@ DEFAULTS = {
     'bird_focal_min': 200,      # mm: a photo taken beyond is looked at as a bird photo
     'doc_jobs': 3,              # Claude calls at the same time
     # the models that describe a sequence (doc.doc_model): its bird photos, and
-    #   the others; keywords_model (None: the default of claude, Opus) for those
-    #   left at None. Measured on 2026-10-24 against Opus: Sonnet finds the
-    #   same species and the same notes for less than half, Haiku describes the
-    #   other photos well enough for a twentieth
-    'doc_model_birds': 'sonnet',
+    #   the others; keywords_model (None: the default of claude) for those left
+    #   at None. Measured on 2026-10-24 against descriptions made before:
+    #   Opus at low effort, its images given with the prompt, keeps the
+    #   species and the notes of each frame for less than half of what it
+    #   cost; Haiku describes the other photos well enough for a twentieth
+    'doc_model_birds': 'opus',
     'doc_model_other': 'haiku',
     'doc_effort': 'low',        # low, medium, high...: None for the default of claude
     'doc_budget': 0,            # dollars at API prices a run may spend on Claude; 0: no limit
@@ -72,8 +73,8 @@ DEFAULTS = {
     'gui_scan_faces': True,     # the search page looks for the faces of the photos in the background
     'doc_eye_region': True,     # write where the eye of the bird is into the file, as an XMP
                                 #   region named "œil" (the index has it in any case)
-    'doc_eyes_model': None,     # the model of the second look at a burst of bird photos (the
-                                #   eye of each frame); None: the same as the first look
+    'doc_eyes_model': 'sonnet', # the model of the second look at a burst of bird photos (the
+                                #   eye of each frame); None: the model of the birds
     'people': [],               # the names the search page offers first for a face (your own
                                 #   config file is the place for them)
     # the cameras the eBird checklists are kept with, as a regular expression on
@@ -86,14 +87,12 @@ DEFAULTS = {
     #   (doc.orient): Haiku misses some that Sonnet finds
     'orient_model': 'sonnet',
     'orient_effort': 'low',
-    # the cameras whose photos it does not look at (a regular expression on
-    #   the camera a file names): those that know which way they are held.
-    #   Measured on 2026-10-24: these write a turned Orientation in part of
-    #   their files, and Claude found 0 photos to turn out of 249 of the
-    #   FZ200, 0 of 208 of the SX620 and 2 of 1 290 of the Z 50; phones have
-    #   the sensor too, but a document shot flat fools it: they are looked at,
-    #   like the D100 and the Coolpix, which have none
-    'orient_skip_cameras': r'PowerShot|^DMC-|\bD90\b|\bZ ?50(_2)?$',
+    # the cameras whose photos it looks at (a regular expression on the camera
+    #   a file names): those that do not know which way they are held. Read on
+    #   2026-10-24 in 120 files of each camera: these never wrote a turned
+    #   Orientation (the D100 writes none at all), where the others, phones
+    #   included, do. A file that names no camera is not looked at
+    'orient_cameras': r'\bD100\b|^E\d{3,4}$|\bD70s?\b|\bD810\b|DSC-H300|\bE-M5\b',
     # the model and the effort of Claude when it sums up what the checklists
     #   of sequences described before say (doc.summarize): text only
     'summary_model': 'sonnet',

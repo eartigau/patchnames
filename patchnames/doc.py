@@ -1111,6 +1111,18 @@ def judge_eyes(seq, answer, tmpdir, index, model=None):
     return cost
 
 
+def first_look(seq, images, rows, instructions, tmpdir, model, effort):
+    """Claude's first look at a sequence, every picture in one call: its
+    answer and what it cost. (Tried on 2026-10-24: a burst in two calls, the
+    model of the birds naming the species on the sharpest frame and a lighter
+    one noting each frame on the sheets, told the species; the notes of the
+    frames came out further from those of one call, whatever the model, and
+    the best frame differed in half the bursts.)"""
+    answer, cost = ask_claude(prompt_for(seq, images, rows, instructions), tmpdir, model, effort,
+                              images=images)
+    return _tidy(answer), cost
+
+
 def frame_notes(names, burst, answer):
     """the notes of each frame of a burst, {name: {'eye', 'clear', 'level',
     'sharp', 'best'}}, and its best frame.
@@ -1651,9 +1663,7 @@ def document(gap=None, force=False, dry_run=False, index_only=False, backup=True
                 seq['people'], seq['guessed'] = faces.early(
                     middle, Image.open(staged[middle]['preview']), when.isoformat(' ') if when else None)
             chosen = doc_model(seq['bird'], asked)
-            answer, cost = ask_claude(prompt_for(seq, images, rows, explanations), tmpdir,
-                                      chosen, effort, images=images)
-            _tidy(answer)
+            answer, cost = first_look(seq, images, rows, explanations, tmpdir, chosen, effort)
             if seq.get('burst'):
                 # a second look, at the eye of each frame at full resolution
                 cost += judge_eyes(seq, answer, tmpdir, index, chosen)
@@ -2285,9 +2295,8 @@ def describe_sequence(seq_id, model=None, effort=None, sheet=12, progress=None):
                 db, middle['name'], Image.open(photoindex.preview_path(middle['name'])),
                 middle['taken'])
         chosen = doc_model(bird, model)
-        answer, cost = ask_claude(prompt_for(seq, images, rows, explanations), tmpdir,
-                                  chosen, effort or cfg.get('doc_effort'), images=images)
-        _tidy(answer)
+        answer, cost = first_look(seq, images, rows, explanations, tmpdir, chosen,
+                                  effort or cfg.get('doc_effort'))
         if seq.get('given') is not None:
             answer.update(_named(seq['given']), note_ebird='')
             answer['autres_mots_cles'] = [word for word in answer.get('autres_mots_cles') or []
@@ -2732,13 +2741,11 @@ ORIENT_TODO = ("FROM photos WHERE rep = 1 AND oriented IS NULL AND "
 
 
 def _orient_wanted(camera):
-    """whether orient looks at the photos of a camera: not those of config
-    'orient_skip_cameras', the cameras that know which way they are held
-    (their files say it), where Claude found next to nothing to turn; a
-    phone, a tablet, a camera without that sensor and a file that names no
-    camera are looked at"""
-    skip = _cfg().get('orient_skip_cameras')
-    return not (skip and camera and re.search(skip, camera))
+    """whether orient looks at the photos of a camera: only those of config
+    'orient_cameras', the cameras that do not know which way they are held;
+    the others write it into their files"""
+    wanted = _cfg().get('orient_cameras')
+    return bool(wanted and camera and re.search(wanted, camera))
 
 
 def orient_left(db):

@@ -229,20 +229,25 @@ bouton « Écrire dans les fichiers » ne l'appellent jamais.
 un abonnement, rien n'est facturé à l'appel, mais chaque séquence compte
 dans vos limites d'utilisation, les mêmes que celles de vos sessions.
 
-Depuis le 24 octobre 2026, une séquence d'oiseaux est décrite par Sonnet
-et une autre par Haiku, à effort réduit (config `doc_model_birds`,
-`doc_model_other`, `doc_effort` ; `--model` les remplace pour un passage).
-Mesuré ce jour-là sur 24 séquences d'oiseaux et 20 autres déjà décrites
-par Opus, en dollars US au prix de l'API :
+Depuis le 24 octobre 2026, une séquence d'oiseaux est décrite par Opus et
+une autre par Haiku, à effort réduit, et l'œil net d'une rafale est jugé
+par Sonnet (config `doc_model_birds`, `doc_model_other`, `doc_eyes_model`,
+`doc_effort` ; `--model` les remplace pour un passage). Mesuré ce jour-là
+sur 24 séquences d'oiseaux et 20 autres déjà décrites par Opus, en dollars
+US au prix de l'API :
 
-| séquences | Opus (avant) | maintenant | ce qui change |
+| séquences | avant | maintenant | ce qui change |
 |---|---|---|---|
-| oiseaux (rafales : note de chaque vue et œil net compris) | 0,10 $, 0,27 $ la rafale de 7 vues | 0,057 $ (Sonnet) | mêmes espèces (21 noms latins sur 24 identiques, les autres sont des animaux qui ne sont pas des oiseaux), même meilleure vue pour 16 rafales sur 20, notes de chaque vue à un point près pour 98 % des vues |
+| rafale d'oiseau, note de chaque vue et œil net compris | 0,27 $ (7 vues) | 0,118 $ | mêmes espèces (24 sur 24), même meilleure vue pour 17 rafales sur 20, notes de chaque vue à un point près pour plus de 98 % des vues |
+| oiseau seul | 0,10 $ | 0,067 $ | |
 | autres | 0,10 $ | 0,003 $ (Haiku) | titres et mots-clés aussi utiles pour chercher ; moins savant (l'escargot des haies devient un escargot) et parfois sans le lieu de la liste eBird |
 
 Pour les 45 414 séquences de l'archive qui n'étaient pas décrites, cela
-fait environ 1 000 $ au lieu de 6 600 $. Deux choses y sont pour beaucoup,
-sans rien changer aux réponses :
+fait environ 1 800 $ au lieu de 6 600 $. Sonnet au lieu d'Opus pour les
+oiseaux (`"doc_model_birds": "sonnet"`) ferait environ 1 000 $ : mêmes
+espèces sur l'échantillon, mais moins sûr de lui sur les cas difficiles
+(oiseaux de mer, goélands). Deux choses y sont pour beaucoup, sans rien
+changer aux réponses :
 
 - **Les images viennent avec la demande**, dans un seul message (l'entrée
   `stream-json` de `claude`), au lieu d'être lues une à une avec l'outil
@@ -253,20 +258,19 @@ sans rien changer aux réponses :
   instructions de `~/.claude/CLAUDE.md`, les skills et les plugins, que
   chaque tour portait : 2 000 jetons fixes par appel au lieu de 6 400.
 
-L'œil net, second regard sur une rafale, est demandé à effort réduit au
-modèle de la séquence (`doc_eyes_model` pour un autre).
+Essayé et laissé de côté : nommer l'espèce avec Opus sur la seule vue la
+plus nette, puis faire noter chaque vue par un modèle plus léger à qui
+l'espèce est donnée. Les notes des vues s'éloignaient de celles d'un seul
+appel, que le modèle léger soit Haiku ou Sonnet, et la meilleure vue
+changeait dans la moitié des rafales.
 
-**Le rythme.** `doc_daily_budget` (en dollars au prix de l'API) est ce que
-la page peut dépenser par jour pour la file de toute l'archive et le
-redressement ; passé ce montant, la file attend le lendemain (la ligne « En
-cours » le dit) et le redressement s'arrête. Ce que vous demandez d'un clic
-n'est jamais retenu. La file de toute l'archive prend les oiseaux d'abord.
-`doc_budget` reste un plafond par passage (0 : aucun), et `--budget` le
-donne à `patchdoc`. Par exemple, dans `~/.config/patchnames/config.json` :
-
-```json
-{"doc_daily_budget": 25}
-```
+**Le rythme.** Il n'y a pas de plafond par défaut. `doc_daily_budget` (en
+dollars au prix de l'API, 0 : aucun) en met un par jour à la file de toute
+l'archive et au redressement : passé ce montant, la file attend le
+lendemain (la ligne « En cours » le dit) et le redressement s'arrête ; ce
+que vous demandez d'un clic n'est jamais retenu. `doc_budget` est un
+plafond par passage (0 : aucun), et `--budget` le donne à `patchdoc`. La
+file de toute l'archive prend les oiseaux d'abord.
 
 ### Les données eBird
 
@@ -745,13 +749,13 @@ l'appel à Claude le demandent.
   faite, ou pas encore refaite debout (ci-dessus), attend son tour.
   Sonnet (config `orient_model`) coûte environ 2 cents US par planche au
   prix de l'API ; Haiku, essayé, laissait passer des photos couchées
-  évidentes. Les appareils qui savent dans quel sens on les tient, et dont
-  Claude ne trouvait presque rien à tourner (Canon PowerShot, Panasonic,
-  Nikon D90 et Z 50 : 2 photos à tourner sur 1 775 regardées des Z 50, FZ200 et
-  SX620), sont sautés (config
-  `orient_skip_cameras`) ; les cellulaires, que trompe un document pris à
-  plat, le Nikon D100 et le Coolpix, qui n'ont pas ce capteur, et les
-  fichiers sans appareil sont regardés. `patchdoc redresser --essai --max 48` dit ce qui serait tourné
+  évidentes. Seules les photos des appareils qui ne savent pas dans quel sens
+  on les tient sont regardées (config `orient_cameras`) : le Nikon D100, les
+  vieux Coolpix (E4500, E995), le D810, le D70s, le Sony H300 et l'Olympus
+  E-M5, dont aucun des 120 fichiers lus par appareil ne se disait tourné
+  (le D100 n'écrit même pas l'étiquette). Les autres, cellulaires compris,
+  l'écrivent eux-mêmes ; un fichier qui ne nomme aucun appareil n'est pas
+  regardé. `patchdoc redresser --essai --max 48` dit ce qui serait tourné
   sans rien toucher.
 - **Le sablier.** Dans la visionneuse, une vue dont l'aperçu n'est pas
   encore gardé est lue dans la photo elle-même, ce qui prend un moment sur
