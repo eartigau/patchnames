@@ -1422,9 +1422,23 @@ async function work(photo, what) {
 function speciesRows(photo) {
   const box = el("div", { class: "fix" });
   const index = state.items.indexOf(photo), species = split(photo.species);
-  const send = async (old, name) => {
-    const reply = await post("/api/species", { name: photo.name, old, new: name });
+  // (a click is seen at once, before the server answers: the button turns
+  //   green for a confirmation, the row is dimmed for a correction)
+  const send = async (old, name, row, button) => {
+    const fields = [...box.querySelectorAll("select, input, button")];
+    fields.forEach((field) => { field.disabled = true; });
+    const said = box.querySelector("p.mono"), before = said && said.textContent;
+    if (button) {
+      button.className = "pill done";
+      button.textContent = "✓ Confirmée";
+    } else if (row) row.classList.add("off");
+    if (said) said.textContent = button ? "Identification vérifiée par vous." : "Correction en cours…";
+    const reply = await post("/api/species", { name: photo.name, old, new: name }).catch((err) => ({ error: String(err) }));
     if (reply.error || !reply.photo) {
+      fields.forEach((field) => { field.disabled = false; });
+      if (row) row.classList.remove("off");
+      if (button) { button.className = "pill"; button.textContent = "Confirmer"; }
+      if (said) said.textContent = before;
       box.append(el("p", { class: "mono", text: reply.error === "refusé"
         ? "Ce serveur date d'avant cette fonction : arrêtez-le (Ctrl-C) et relancez `patchdoc gui`."
         : reply.error || "La correction a échoué." }));
@@ -1451,24 +1465,26 @@ function speciesRows(photo) {
         (name || photo.title) && el("option", { value: UNKNOWN, text: "Indéterminé" }),
         el("option", { value: NEW, text: "+ autre espèce…" }));
       const back = () => { typed.hidden = true; choice.hidden = false; choice.value = name; };
+      const row = el("div", { class: "who" });
       choice.addEventListener("change", () => {
-        if (choice.value === UNKNOWN) return send(name, "");
-        if (choice.value !== NEW) return send(name, choice.value);
+        if (choice.value === UNKNOWN) return send(name, "", row);
+        if (choice.value !== NEW) return send(name, choice.value, row);
         choice.hidden = true;
         typed.hidden = false;
         typed.focus();
       });
       typed.addEventListener("keydown", (event) => {
-        if (event.key === "Enter" && typed.value.trim()) send(name, typed.value.trim());
+        if (event.key === "Enter" && typed.value.trim()) send(name, typed.value.trim(), row);
         if (event.key !== "Escape") return;
         event.stopPropagation();
         typed.value = "";
         back();
       });
       typed.addEventListener("blur", () => { if (!typed.value.trim() && choice.hidden) back(); });
-      return el("div", { class: "who" }, choice, typed,
-        name && !photo.verified && el("button", { class: "pill", type: "button", text: "Confirmer",
-          title: "L'identification est juste : la marquer comme vérifiée par vous", onclick: () => send(name, name) }));
+      const yes = name && !photo.verified && el("button", { class: "pill", type: "button", text: "Confirmer",
+        title: "L'identification est juste : la marquer comme vérifiée par vous", onclick: () => send(name, name, row, yes) });
+      row.append(choice, typed, ...(yes ? [yes] : []));
+      return row;
     }));
   fill([]);
   if (photo.checklist) {
