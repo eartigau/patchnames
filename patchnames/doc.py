@@ -1101,7 +1101,8 @@ def judge_eyes(seq, answer, tmpdir, index, model=None):
                              for name in eyes)
         said, cost = ask_claude(EYES_PROMPT.format(subject=subject, images='\n'.join(paths),
                                                    measured=measured), tmpdir, model, effort,
-                                schema=EYES_SCHEMA, system=EYES_SYSTEM, needs=('yeux',))
+                                schema=EYES_SCHEMA, system=EYES_SYSTEM, needs=('yeux',),
+                                images=paths)
     except RuntimeError:
         return 0.0
     notes = {str(view.get('numero', '')).strip(): _note(view.get('oeil_net'))
@@ -1280,15 +1281,63 @@ def prompt_for(seq, images, rows, instructions):
         instructions=instructions, topics=', '.join(f'"{topic}"' for topic in TOPICS))
 
 
+#: how a prompt asks for its images to be read with the Read tool, and what it
+#:  says instead when they come with the message (ask_claude)
+READ_ASKS = (("Lis ces images avec l'outil Read :", 'Les images sont jointes à ce message, dans cet '
+              'ordre :'),
+             ("Lis-la avec l'outil Read : ", 'Elle est jointe à ce message : '),
+             ("Tu lis les images indiquées avec l'outil Read, puis", 'Tu regardes les images jointes '
+              'à la demande, puis'))
+
+
+def _attached(prompt, images):
+    """the message that brings a prompt and its images to Claude at once, as a
+    line of claude's stream-json input: the text, whose paths of images are
+    their names, then each image after its name"""
+    import base64
+    for asked, said in READ_ASKS:
+        prompt = prompt.replace(asked, said)
+    content = []
+    for path in images:
+        prompt = prompt.replace(path, os.path.basename(path))
+    content.append({'type': 'text', 'text': prompt})
+    for path in images:
+        kind = 'image/png' if path.lower().endswith('.png') else 'image/jpeg'
+        with open(path, 'rb') as handle:
+            data = base64.b64encode(handle.read()).decode()
+        content += [{'type': 'text', 'text': os.path.basename(path)},
+                    {'type': 'image', 'source': {'type': 'base64', 'media_type': kind, 'data': data}}]
+    return json.dumps({'type': 'user', 'message': {'role': 'user', 'content': content}}) + '\n'
+
+
 def ask_claude(prompt, tmpdir, model=None, effort=None, tries=2, schema=None, system=None,
-               needs=('titre', 'description')):
+               needs=('titre', 'description'), images=None):
     """Claude's answer to a prompt, as (dict, cost in dollars at API prices);
     schema: that of the answer (the description of a sequence by default),
-    needs: the keys it must not come back without"""
-    cmd = ['claude', '-p', prompt, '--system-prompt', system or SYSTEM, '--tools', 'Read',
-           '--allowedTools', 'Read', '--add-dir', tmpdir, '--output-format', 'json',
-           '--json-schema', json.dumps(schema or SCHEMA), '--no-session-persistence',
-           '--strict-mcp-config', '--disable-slash-commands']
+    needs: the keys it must not come back without; images: the files the
+    prompt names, which it asks to be read.
+
+    The images come with the prompt in one message (claude's stream-json
+    input), unless config 'claude_inline' is false: Claude then reads each
+    with the Read tool, a turn more that sends the whole exchange again. In
+    safe mode (--safe-mode), claude leaves out what customizes it on this
+    machine (the instructions of CLAUDE.md, the skills, the plugins), which
+    every turn would carry: a third of what a call reads, measured."""
+    system = system or SYSTEM
+    inline = bool(images) and _cfg().get('claude_inline', True)
+    if inline:
+        for asked, said in READ_ASKS:
+            system = system.replace(asked, said)
+        cmd = ['claude', '-p', '--input-format', 'stream-json', '--output-format', 'stream-json',
+               '--verbose', '--tools', '']
+        message = _attached(prompt, images)
+    else:
+        cmd = ['claude', '-p', prompt, '--tools', 'Read', '--allowedTools', 'Read', '--add-dir',
+               tmpdir, '--output-format', 'json']
+        message = None
+    cmd += ['--system-prompt', system, '--json-schema', json.dumps(schema or SCHEMA),
+            '--no-session-persistence', '--strict-mcp-config', '--disable-slash-commands',
+            '--safe-mode']
     if model:
         cmd += ['--model', model]
     if effort:
@@ -1298,16 +1347,21 @@ def ask_claude(prompt, tmpdir, model=None, effort=None, tries=2, schema=None, sy
         if attempt:
             time.sleep(10)
         try:
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=900, cwd=tmpdir)
-            if res.returncode != 0:
+            res = subprocess.run(cmd, input=message, capture_output=True, text=True, timeout=900,
+                                 cwd=tmpdir)
+            try:
+                # (stream-json: one object a line, the result last)
+                lines = [line for line in res.stdout.splitlines() if line.strip()]
+                out = json.loads(lines[-1]) if inline and lines else json.loads(res.stdout)
+            except (ValueError, IndexError):
+                out = {}
+            if res.returncode != 0 or out.get('is_error'):
                 # (what claude says of it, the usage limit and when it lifts for
                 #   one, is the 'result' of its answer)
-                try:
-                    said = str(json.loads(res.stdout).get('result') or '')
-                except (ValueError, AttributeError):
-                    said = ''
+                said = str(out.get('result') or '') if isinstance(out, dict) else ''
                 raise RuntimeError(f'claude a échoué : {(said or res.stderr or res.stdout).strip()[:300]}')
-            out = json.loads(res.stdout)
+            if not out:
+                raise RuntimeError(f'pas de réponse lisible : {res.stdout.strip()[-300:]}')
             answer = out.get('structured_output')
             if not isinstance(answer, dict):
                 text = out.get('result') or ''
@@ -1455,6 +1509,30 @@ def _cost_key(model, effort):
     return f'cost_per_sequence:{model or "default"}:{effort or "default"}'
 
 
+def _tidy(answer):
+    """an answer without the empty quotes a model sometimes leaves in its
+    text (the "" asked for a field with nothing to say, put at the end of
+    the description by Haiku: 2 descriptions out of 20, measured)"""
+    for key in ('titre', 'description'):
+        if isinstance(answer.get(key), str):
+            answer[key] = ' '.join(re.sub(r'(?<![\w"])""(?![\w"])', ' ', answer[key]).split())
+    return answer
+
+
+def doc_model(bird, model=None):
+    """the model Claude describes a sequence with: `model` when one is asked
+    for, else config 'doc_model_birds' for a sequence of bird photos and
+    'doc_model_other' for another, else 'keywords_model' (None: the default
+    of claude). Measured on 2026-10-24 against descriptions made by Opus:
+    Sonnet at low effort finds the same species, the same notes of each
+    frame to a point and mostly the same best frame of a burst, for less
+    than half; Haiku describes the other photos well enough to find them
+    again, for a twentieth of what Opus costs."""
+    cfg = _cfg()
+    return (model or cfg.get('doc_model_birds' if bird else 'doc_model_other')
+            or cfg.get('keywords_model'))
+
+
 def _cost_guess(model, effort):
     """what a sequence costs in dollars at API prices, and whether a run
     with this model and effort measured it"""
@@ -1476,7 +1554,8 @@ def document(gap=None, force=False, dry_run=False, index_only=False, backup=True
     (see the module)."""
     cfg = _cfg()
     gap = cfg['keywords_gap'] if gap is None else gap
-    model = model or cfg.get('keywords_model')
+    asked = model           # (the model of each sequence: doc_model)
+    model = doc_model(True, model)
     effort = effort or cfg.get('doc_effort')
     budget = float(cfg.get('doc_budget') or 0) if budget is None else budget
     jobs = int(jobs or cfg['doc_jobs'])
@@ -1571,11 +1650,13 @@ def document(gap=None, force=False, dry_run=False, index_only=False, backup=True
                 when = _when(rows.get(middle, {}))
                 seq['people'], seq['guessed'] = faces.early(
                     middle, Image.open(staged[middle]['preview']), when.isoformat(' ') if when else None)
+            chosen = doc_model(seq['bird'], asked)
             answer, cost = ask_claude(prompt_for(seq, images, rows, explanations), tmpdir,
-                                      model, effort)
+                                      chosen, effort, images=images)
+            _tidy(answer)
             if seq.get('burst'):
                 # a second look, at the eye of each frame at full resolution
-                cost += judge_eyes(seq, answer, tmpdir, index, model)
+                cost += judge_eyes(seq, answer, tmpdir, index, chosen)
             with lock:
                 spent['total'] += cost
             kept, checklist = settle(seq, answer, data)
@@ -2203,9 +2284,10 @@ def describe_sequence(seq_id, model=None, effort=None, sheet=12, progress=None):
             seq['people'], seq['guessed'] = faces.scan(
                 db, middle['name'], Image.open(photoindex.preview_path(middle['name'])),
                 middle['taken'])
+        chosen = doc_model(bird, model)
         answer, cost = ask_claude(prompt_for(seq, images, rows, explanations), tmpdir,
-                                  model or cfg.get('keywords_model'),
-                                  effort or cfg.get('doc_effort'))
+                                  chosen, effort or cfg.get('doc_effort'), images=images)
+        _tidy(answer)
         if seq.get('given') is not None:
             answer.update(_named(seq['given']), note_ebird='')
             answer['autres_mots_cles'] = [word for word in answer.get('autres_mots_cles') or []
@@ -2214,7 +2296,7 @@ def describe_sequence(seq_id, model=None, effort=None, sheet=12, progress=None):
             # a second look, at the eye of each frame at full resolution
             if progress:
                 progress(len(names), len(names), 'yeux')
-            cost += judge_eyes(seq, answer, tmpdir, 0, model or cfg.get('keywords_model'))
+            cost += judge_eyes(seq, answer, tmpdir, 0, chosen)
         # where the eye is in a bird photo that is not part of a burst
         single = single_eye(answer, rows[middle['name']], images[1]) if bird and not seq.get(
             'burst') else (None, None)
@@ -2643,10 +2725,26 @@ def _orient_sheet(names, path):
     page.save(path, quality=88)
 
 
+#: the photos orient looks at: the representative frame of a sequence nobody
+#:  looked at, whose pictures are as its file says (see straighten)
+ORIENT_TODO = ("FROM photos WHERE rep = 1 AND oriented IS NULL AND "
+               "(upright = 1 OR ext IN ('jpg', 'jpeg'))")
+
+
+def _orient_wanted(camera):
+    """whether orient looks at the photos of a camera: not those of config
+    'orient_skip_cameras', the cameras that know which way they are held
+    (their files say it), where Claude found next to nothing to turn; a
+    phone, a tablet, a camera without that sensor and a file that names no
+    camera are looked at"""
+    skip = _cfg().get('orient_skip_cameras')
+    return not (skip and camera and re.search(skip, camera))
+
+
 def orient_left(db):
     """how many sequences orient has yet to look at, now"""
-    return db.execute("SELECT COUNT(*) FROM photos WHERE rep = 1 AND oriented IS NULL AND "
-                      "(upright = 1 OR ext IN ('jpg', 'jpeg'))").fetchone()[0]
+    return sum(1 for row in db.execute(f'SELECT camera {ORIENT_TODO}')
+               if _orient_wanted(row['camera']))
 
 
 def orient(stop=None, tell=None, model=None, effort=None, most=None, dry=False, hold=None):
@@ -2668,9 +2766,8 @@ def orient(stop=None, tell=None, model=None, effort=None, most=None, dry=False, 
     db = photoindex.connect()
     try:
         rows = [row for row in db.execute(
-            "SELECT name, seq FROM photos WHERE rep = 1 AND oriented IS NULL AND "
-            "(upright = 1 OR ext IN ('jpg', 'jpeg')) ORDER BY COALESCE(local, taken) DESC")
-            if os.path.isfile(photoindex.thumb_path(row['name']))]
+            f'SELECT name, seq, camera {ORIENT_TODO} ORDER BY COALESCE(local, taken) DESC')
+            if _orient_wanted(row['camera']) and os.path.isfile(photoindex.thumb_path(row['name']))]
         rows = rows[:most] if most else rows
         out = {'looked': 0, 'turned': 0, 'left': len(rows), 'cost': 0.0, 'found': []}
         ways = {'horaire': ['cw'], 'antihoraire': ['ccw'], 'demi-tour': ['cw', 'cw']}
@@ -2682,7 +2779,8 @@ def orient(stop=None, tell=None, model=None, effort=None, most=None, dry=False, 
                 sheet = os.path.join(tmpdir, f'planche_{start}.jpg')
                 _orient_sheet([row['name'] for row in part], sheet)
                 answer, cost = ask_claude(ORIENT_PROMPT.format(count=len(part), sheet=sheet), tmpdir,
-                                          model, effort, schema=ORIENT_SCHEMA, needs=())
+                                          model, effort, schema=ORIENT_SCHEMA, needs=(),
+                                          images=[sheet])
                 out['cost'] += cost
                 turned = {}
                 for item in answer.get('a_tourner') or []:

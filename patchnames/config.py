@@ -47,8 +47,22 @@ DEFAULTS = {
     #   eBird checklists as a prior (doc.py), and the search page (gui.py)
     'bird_focal_min': 200,      # mm: a photo taken beyond is looked at as a bird photo
     'doc_jobs': 3,              # Claude calls at the same time
-    'doc_effort': None,         # low, medium, high...: None for the default of claude
+    # the models that describe a sequence (doc.doc_model): its bird photos, and
+    #   the others; keywords_model (None: the default of claude, Opus) for those
+    #   left at None. Measured on 2026-10-24 against Opus: Sonnet finds the
+    #   same species and the same notes for less than half, Haiku describes the
+    #   other photos well enough for a twentieth
+    'doc_model_birds': 'sonnet',
+    'doc_model_other': 'haiku',
+    'doc_effort': 'low',        # low, medium, high...: None for the default of claude
     'doc_budget': 0,            # dollars at API prices a run may spend on Claude; 0: no limit
+    # dollars at API prices the search page may spend on Claude in a day, the
+    #   batches and the look for photos on their side (what is asked by a click
+    #   is never held back); past it the batch waits for the next day. 0: no limit
+    'doc_daily_budget': 0,
+    # the images come with the prompt in one message (doc.ask_claude); false:
+    #   Claude reads each with the Read tool, a turn more
+    'claude_inline': True,
     'index_dir': str(Path.home() / 'photo' / 'patchdoc'),   # the index, thumbnails, previews
     'gui_port': 8765,
     'gui_fill_thumbs': True,    # the search page makes the missing thumbnails in the background
@@ -72,6 +86,14 @@ DEFAULTS = {
     #   (doc.orient): Haiku misses some that Sonnet finds
     'orient_model': 'sonnet',
     'orient_effort': 'low',
+    # the cameras whose photos it does not look at (a regular expression on
+    #   the camera a file names): those that know which way they are held.
+    #   Measured on 2026-10-24: these write a turned Orientation in part of
+    #   their files, and Claude found 0 photos to turn out of 249 of the
+    #   FZ200, 0 of 208 of the SX620 and 2 of 1 290 of the Z 50; phones have
+    #   the sensor too, but a document shot flat fools it: they are looked at,
+    #   like the D100 and the Coolpix, which have none
+    'orient_skip_cameras': r'PowerShot|^DMC-|\bD90\b|\bZ ?50(_2)?$',
     # the model and the effort of Claude when it sums up what the checklists
     #   of sequences described before say (doc.summarize): text only
     'summary_model': 'sonnet',

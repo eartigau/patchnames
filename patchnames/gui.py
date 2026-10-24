@@ -495,7 +495,10 @@ def _running():
                 f"{n(batch['done'])} sur {n(batch['total'])} séquences faites, "
                 f"{n(batch['active'])} en cours")
         wait = round((batch['until'] - time.time()) / 60)
-        if wait > 0:
+        if wait > 90:
+            text += (f", en pause jusqu'à {time.strftime('%H:%M', time.localtime(batch['until']))}"
+                     f" ({batch['why'][:120]})")
+        elif wait > 0:
             text += f", en pause encore {wait} min ({batch['why'][:120]})"
         say('batch', text, True, {'path': '/api/batch/stop', 'body': {}})
     if alone:
@@ -609,8 +612,19 @@ def _orient_job():
         finally:
             if mine:
                 _release(seq)
+    spent = {'cost': 0.0}
+
+    def tell(counts):
+        # (what each sheet cost counts in the day's spending; past the budget
+        #   of the day the look stops, and goes on when it is started again)
+        _day_spend(float(counts.get('cost') or 0) - spent['cost'])
+        spent['cost'] = float(counts.get('cost') or 0)
+        _orient.update(counts)
+        if _over_day():
+            _orient.update(note="plafond du jour atteint (config doc_daily_budget) : relancez demain")
+            _orient_stop.set()
     try:
-        found = orient(stop=_orient_stop, tell=_orient.update, hold=hold)
+        found = orient(stop=_orient_stop, tell=tell, hold=hold)
         _orient.update(found, found=len(found['found']), state='done', ended=time.time())
     except Exception as exc:
         _orient.update(state='error', error=str(exc), ended=time.time())
@@ -872,6 +886,7 @@ def _work(seq, ask, write=True):
                                                                    stage=stage))
             with _lock:
                 _spent['total'] += cost
+            _day_spend(cost)
         if not write:
             tell(state='done', photo=photo())
             _wake.set()
@@ -942,14 +957,16 @@ def _batch_add(names):
 
 def _batch_archive():
     """queue for Claude every sequence of the archive that has no description
-    yet, the newest first. The index keeps that this is under way (meta
+    yet, those of birds first, the newest first. The index keeps that this is under way (meta
     'batch_archive'): a server started again goes on with it (_batch_again)."""
     if not _archive()['mounted']:
         return {'error': "Le disque d'archive n'est pas monté : Claude ne peut pas voir les "
                          'séquences.'}
     db = _db()
+    # (the birds first, the newest first: they are what the archive is searched for)
     sizes = {row['seq']: row['seq_n'] or 1 for row in db.execute(
-        f'SELECT seq, seq_n {ARCHIVE_TODO} ORDER BY COALESCE(local, taken) DESC')}
+        f'SELECT seq, seq_n {ARCHIVE_TODO} ORDER BY COALESCE(bird, 0) DESC, '
+        'COALESCE(local, taken) DESC')}
     db.close()
     if not sizes:
         _batch_keep(False)
@@ -1036,13 +1053,49 @@ def _batch_done(seq, photo, error):
         _batch['base'] += KEPT
 
 
+def _day_spend(cost):
+    """add what Claude cost (dollars at API prices) to what the page spent
+    today, kept in the index (meta 'claude_day')"""
+    if not cost:
+        return
+    today = time.strftime('%Y-%m-%d')
+    with _lock:
+        try:
+            day = json.loads(photoindex.meta('claude_day') or '{}')
+        except ValueError:
+            day = {}
+        spent = (day.get('spent') or 0.0) if day.get('day') == today else 0.0
+        db = photoindex.connect()
+        photoindex.set_meta(db, 'claude_day', json.dumps({'day': today, 'spent': spent + cost}))
+        db.close()
+
+
+def _over_day():
+    """whether the page spent today what config doc_daily_budget allows"""
+    budget = float(_config_module.load().get('doc_daily_budget') or 0)
+    if not budget:
+        return False
+    try:
+        day = json.loads(photoindex.meta('claude_day') or '{}')
+    except ValueError:
+        return False
+    return day.get('day') == time.strftime('%Y-%m-%d') and (day.get('spent') or 0) >= budget
+
+
 def _batch_next():
     """what a worker of the batch does next: ('do', a sequence), ('wait',
-    seconds) while the batch waits (see STREAK) or the archive is away, or
-    ('end', whether the batch of the whole archive is over)"""
+    seconds) while the batch waits (see STREAK), the archive is away or the
+    budget of the day is spent (until the next day), or ('end', whether the
+    batch of the whole archive is over)"""
     budget = float(_config_module.load().get('doc_budget') or 0)
     mounted = bool(_archive()['mounted'])
+    over = _over_day()
     with _lock:
+        if _batch['waiting'] and over and _batch['until'] <= time.time():
+            # (the next day, a little after midnight)
+            tomorrow = time.mktime(time.strptime(time.strftime('%Y-%m-%d'), '%Y-%m-%d')) + 86400
+            _batch['until'], _batch['why'] = tomorrow + 60, (
+                'plafond du jour atteint (config doc_daily_budget) : reprise demain')
         if _batch['waiting'] and budget and _spent['total'] >= budget:
             _batch['note'] = (f"Plafond d'appels à Claude de cette session atteint : "
                               f"{len(_batch['waiting'])} séquences laissées (config doc_budget ; "
