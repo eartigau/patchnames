@@ -43,6 +43,11 @@ FACE, SMALL = 0.85, 36
 #:  from which a proposed face becomes an example for others; OpenCV gives
 #:  0.363 as the limit of "the same person" for SFace
 GUESS, CHAIN = 0.42, 0.52
+#: and from which the page says a proposed name is very clear ("très
+#:  probable"). Measured on 2026-10-24 on the 151 faces the photographer had
+#:  named (13 people): the most alike face of another person reaches it for
+#:  1 % of them, the most alike face of the same person for 42 %
+CLEAR = 0.70
 
 _lock, _nets, _early = threading.Lock(), {}, threading.Lock()
 
@@ -124,9 +129,12 @@ def _year(taken):
         return None
 
 
-def recognise(db):
+def recognise(db, photos=None):
     """propose a name for every face that has none (see the module); the
-    photos whose proposals changed"""
+    photos whose proposals changed. photos: only the faces of these photos
+    are looked at, the others keep their proposals and the examples they
+    make (a second for a photo just named or looked at, where all the faces
+    take about a minute: later() does those)"""
     import numpy as np
     rows = db.execute('SELECT id, photo, vector, taken, person, sure, banned, likeness '
                       'FROM faces').fetchall()
@@ -138,8 +146,14 @@ def recognise(db):
     years = [_year(row['taken']) for row in rows]
     banned = [{int(p) for p in (row['banned'] or '').split(',') if p} for row in rows]
     named = [k for k, row in enumerate(rows) if row['sure'] == 1 and row['person']]
-    unknown = [k for k, row in enumerate(rows) if row['sure'] != 1]
-    guess = {}                      # index of a face -> (person, likeness)
+    unknown = [k for k, row in enumerate(rows) if row['sure'] != 1
+               and (photos is None or row['photo'] in photos)]
+    # (the proposals left as they are, and the examples they make)
+    fixed = {} if photos is None else {
+        k: (row['person'], row['likeness']) for k, row in enumerate(rows)
+        if row['sure'] != 1 and row['photo'] not in photos and row['person']
+        and row['likeness'] is not None}
+    guess, last = dict(fixed), None     # index of a face -> (person, likeness)
     for _ in range(8):
         examples = named + [k for k, (_, likeness) in guess.items() if likeness >= CHAIN]
         who = [rows[k]['person'] if k in named else guess[k][0] for k in examples]
@@ -173,15 +187,16 @@ def recognise(db):
                 del fresh[k]
             else:
                 taken[(rows[k]['photo'], person)] = k
-        if fresh == guess:
+        if fresh == last:
             break
-        guess = fresh
+        guess, last = {**fixed, **fresh}, fresh
     changed = set()
     for k in unknown:
         person, likeness = guess.get(k, (None, None))
         if person != rows[k]['person']:
             changed.add(rows[k]['photo'])
-        db.execute('UPDATE faces SET person = ?, likeness = ?, sure = 0 WHERE id = ?',
+        # (a face the photographer named meanwhile keeps its name)
+        db.execute('UPDATE faces SET person = ?, likeness = ?, sure = 0 WHERE id = ? AND sure != 1',
                    (person, likeness, rows[k]['id']))
     db.commit()
     return changed
@@ -232,9 +247,49 @@ def name(db, face, person, born=None):
         db.execute('UPDATE faces SET person = NULL, sure = 0, likeness = NULL, banned = ? '
                    'WHERE id = ?', (refused, face))
     db.commit()
-    changed = recognise(db) | {row['photo']}
+    # (at once for the faces of this photo: one person is once in a photo;
+    #   the others in the background)
+    changed = recognise(db, {row['photo']}) | {row['photo']}
     sync(db, changed)
+    later()
     return changed
+
+
+#: the background recognise() of every face: whether one runs, and whether
+#:  another is asked for (a name given while it runs)
+_later, _later_lock = {'thread': None, 'again': False}, threading.Lock()
+
+
+def later():
+    """recognise every face again in the background, then bring the new
+    proposals to the index; asked several times while it runs, it runs once
+    more after"""
+    with _later_lock:
+        _later['again'] = True
+        if _later['thread'] is None:
+            _later['thread'] = threading.Thread(target=_later_job, daemon=True)
+            _later['thread'].start()
+
+
+def busy():
+    """whether later() is at work"""
+    return _later['thread'] is not None
+
+
+def _later_job():
+    while True:
+        with _later_lock:
+            if not _later['again']:
+                _later['thread'] = None
+                return
+            _later['again'] = False
+        db = photoindex.connect()
+        try:
+            sync(db, recognise(db))
+        except Exception:
+            pass            # (the next name given asks again)
+        finally:
+            db.close()
 
 
 def early(name, img, taken):
@@ -245,7 +300,8 @@ def early(name, img, taken):
         db = photoindex.connect()
         if db.execute('SELECT 1 FROM faces WHERE photo = ? LIMIT 1', (name,)).fetchone() is None:
             store(db, name, look(img), taken)
-            recognise(db)
+            recognise(db, {name})
+            later()
         rows = db.execute('SELECT p.name, f.sure FROM faces f JOIN people p ON p.id = f.person '
                           'WHERE f.photo = ? ORDER BY f.x', (name,)).fetchall()
         db.close()
@@ -267,10 +323,35 @@ def renamed(db, names):
 
 
 def of_photo(db, name):
-    """the faces of a photo, from left to right, as the page gets them"""
-    return [dict(row) for row in db.execute(
-        'SELECT f.id, f.x, f.y, f.w, f.h, f.sure, f.likeness, p.name AS person, p.born '
-        'FROM faces f LEFT JOIN people p ON p.id = f.person WHERE f.photo = ? ORDER BY f.x', (name,))]
+    """the faces of a photo, from left to right, as the page gets them: a
+    proposed name is 'clear' when its likeness reaches CLEAR"""
+    return [dict(row, clear=row['sure'] != 1 and (row['likeness'] or 0) >= CLEAR)
+            for row in db.execute(
+                'SELECT f.id, f.x, f.y, f.w, f.h, f.sure, f.likeness, p.name AS person, p.born '
+                'FROM faces f LEFT JOIN people p ON p.id = f.person WHERE f.photo = ? ORDER BY f.x',
+                (name,))]
+
+
+def of_sequence(db, name):
+    """the people of the sequence of a photo, as the page shows them: one
+    entry a person, {'person', 'sure': a face of it named or confirmed by
+    the photographer, 'likeness': the best of its proposed faces (None when
+    sure), 'clear': that likeness reaches CLEAR, 'frame': the photo of that
+    face}, the sure first, then the most alike"""
+    row = db.execute('SELECT seq FROM photos WHERE name = ?', (name,)).fetchone()
+    frames = [r['name'] for r in db.execute('SELECT name FROM photos WHERE seq = ?',
+                                            (row['seq'],))] if row and row['seq'] else [name]
+    marks = ', '.join('?' * len(frames))
+    found = {}
+    for face in db.execute(f'SELECT p.name AS person, f.sure, f.likeness, f.photo FROM faces f '
+                           f'JOIN people p ON p.id = f.person WHERE f.photo IN ({marks})', frames):
+        sure, likeness = face['sure'] == 1, face['likeness'] or 0.0
+        best = found.get(face['person'])
+        if best is None or (sure, likeness) > (best['sure'], best['likeness'] or 0.0):
+            found[face['person']] = {'person': face['person'], 'sure': sure,
+                                     'likeness': None if sure else round(likeness, 3),
+                                     'clear': not sure and likeness >= CLEAR, 'frame': face['photo']}
+    return sorted(found.values(), key=lambda who: (not who['sure'], -(who['likeness'] or 0.0)))
 
 
 def scan(db, name, img, taken):
@@ -278,6 +359,7 @@ def scan(db, name, img, taken):
     propose their names; the names for Claude: (given, proposed)"""
     if db.execute('SELECT faces FROM photos WHERE name = ?', (name,)).fetchone()['faces'] is None:
         store(db, name, look(img), taken)
-        sync(db, recognise(db) | {name})
+        sync(db, recognise(db, {name}) | {name})
+        later()
     row = db.execute('SELECT people, guessed FROM photos WHERE name = ?', (name,)).fetchone()
     return row['people'] or '', row['guessed'] or ''

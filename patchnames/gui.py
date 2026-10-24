@@ -42,6 +42,7 @@ The page (gui/index.html, app.js) asks for:
     /api/backup              the backup of the index on GitHub; (POST) make
                              one and send it (backup.py)
     /api/faces?name=         the faces of a photo, looked for if nobody did
+    /api/people?name=        the people of the sequence of a photo, and how sure
     /api/face                (POST) who a face is
     /api/pano                (POST) stitch a sequence into a panorama
     /api/quit                (POST) stop this server (started from the Dock, it
@@ -541,6 +542,9 @@ def _running():
                         f"{n(straight.get('checked', 0) + straight['left'])}")
     if _store.get('filling'):
         say('thumbs', f"Vignettes : {n(_store['have'])} sur {n(_store['total'])}")
+    from . import faces
+    if faces.busy():
+        say('recognise', 'Reconnaissance des visages sur toute la base, après un nom donné')
     seen = _store.get('faces') or {}
     if seen.get('total') and seen['done'] < seen['total']:
         say('faces', f"Visages cherchés : {n(seen['done'])} sur {n(seen['total'])} photos")
@@ -1353,6 +1357,15 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, _orient_status())
             elif url.path == '/api/running':
                 self._send(200, {'jobs': _running()})
+            elif url.path == '/api/people':
+                # the people of a sequence: confirmed, very clear, or proposed
+                from . import faces
+                db = _db()
+                try:
+                    self._send(200, {'people': faces.of_sequence(
+                        db, os.path.basename(args.get('name', '')))})
+                finally:
+                    db.close()
             elif url.path == '/api/faces':
                 self._send(200, _faces(os.path.basename(args.get('name', ''))))
             else:

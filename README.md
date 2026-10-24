@@ -614,9 +614,19 @@ sur votre machine, par deux petits modèles d'OpenCV téléchargés une fois
   (`{"people": ["Alice", "Bob"]}` dans votre `config.json`), puis ceux
   déjà donnés, puis « + ajouter un nom… » pour en taper un nouveau.
 - Ce visage devient un exemple, daté par sa photo. Les autres visages lui
-  sont comparés et le nom est proposé, avec un point d'interrogation, là où
-  la ressemblance est forte ; « Oui » le confirme, « Non » l'écarte pour de
-  bon.
+  sont comparés et le nom est proposé là où la ressemblance est forte ;
+  « Oui » le confirme, « Non » l'écarte pour de bon. Le bouton change
+  d'allure dès le clic ; la comparaison de tous les visages de la base, qui
+  prend une minute, se refait ensuite en arrière-plan (la ligne « En cours »
+  le dit).
+- **Ce qui est sûr.** Sous « Personnes », un nom confirmé par vous est en
+  vert avec « ✓ » (un clic montre toutes les photos de la personne) ; un nom
+  proposé est « très probable » (en bleu) quand la ressemblance atteint
+  0,70, et suivi d'un « ? » (en orange) sinon. Un clic sur un nom proposé
+  montre son visage, sur la vue de la séquence où il est, avec son « Oui »
+  et son « Non ». Le seuil de 0,70 vient de vos 151 visages nommés le 24
+  octobre 2026 : le visage le plus ressemblant d'une autre personne ne
+  l'atteint que pour 1 % d'entre eux, celui de la même personne pour 42 %.
 - **L'âge.** Un exemple ne vaut que pour les années autour de sa photo :
   un an pour un bébé, deux ou trois pour un enfant, douze pour un adulte
   (quatre si l'année de naissance n'est pas donnée), et personne n'est

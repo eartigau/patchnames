@@ -1133,6 +1133,7 @@ async function loadStrip(photo, index) {
 }
 
 async function openViewer(index) {
+  state.faceFocus = "";       // (the face a click on a name asked for belongs to the photo it was on)
   const photo = state.items[index];
   if (!photo) return;
   state.current = index;
@@ -1208,9 +1209,49 @@ function drawFaces() {
   const left = frame.left - stage.left + (frame.width - width) / 2;
   const top = frame.top - stage.top + (frame.height - height) / 2;
   state.faceList.forEach((face, k) => box.append(el("div", {
-    class: "face" + (face.sure === 1 ? " sure" : face.person ? " guess" : ""),
+    class: "face" + (face.sure === 1 ? " sure" : face.clear ? " clear" : face.person ? " guess" : "")
+      + (face.person && face.person === state.faceFocus ? " focus" : ""),
     style: `left:${left + face.x * width}px;top:${top + face.y * height}px;width:${face.w * width}px;height:${face.h * height}px`,
-  }, el("span", { text: `${k + 1}${face.person ? " " + face.person + (face.sure === 1 ? "" : " ?") : ""}` }))));
+  }, el("span", { text: `${k + 1}${face.person ? " " + face.person + (face.sure === 1 ? " ✓" : face.clear ? "" : " ?") : ""}` }))));
+}
+
+// a likeness as the page says it: 0.734 -> "0,73"
+const alike = (value) => Number(value).toFixed(2).replace(".", ",");
+
+// the people of a sequence: confirmed by the photographer (✓, a click shows
+// all their photos), very clear, or proposed (a click shows the face, to
+// confirm or refuse it). Drawn from the names the photo carries, then from
+// what the server says of each (/api/people)
+function peopleChips(photo, people, guessed) {
+  const box = el("div", { class: "chips" });
+  const draw = (said) => box.replaceChildren(...said.map((who) => who.sure
+    ? el("span", { class: "chip person sure", text: "✓ " + who.person,
+                   title: `${who.person} : confirmé par vous. Un clic montre toutes les photos de cette personne.`,
+                   onclick: () => setFilter({ person: who.person }) })
+    : el("span", { class: "chip person " + (who.clear ? "clear" : "guess"),
+                   text: who.person + (who.clear ? " · très probable" : " ?"),
+                   title: `${who.person} : nom proposé d'après les visages que vous avez nommés`
+                     + (who.likeness ? ` (ressemblance ${alike(who.likeness)})` : "")
+                     + (who.clear ? ", très probable" : ", à confirmer")
+                     + ". Un clic montre ce visage, pour le confirmer ou le refuser.",
+                   onclick: () => faceToConfirm(photo, who) })));
+  draw([...people.map((person) => ({ person, sure: true })), ...guessed.map((person) => ({ person }))]);
+  fetch("/api/people?name=" + encodeURIComponent(photo.name)).then((reply) => reply.json()).then((reply) => {
+    if (Array.isArray(reply.people) && reply.people.length) draw(reply.people);
+  }).catch(() => {});        // (a server from before this: the names as they are)
+  return box;
+}
+
+// a proposed name clicked: the faces of the frame where it is, that face
+// marked, and its row brought into view with its "Oui" and "Non"
+function faceToConfirm(photo, who) {
+  state.faceFocus = who.person;
+  if (!facesOn()) {
+    try { localStorage.setItem("patchdoc.visages", "oui"); } catch (err) { /* private mode */ }
+    $("viewerInfo").replaceChildren(...info(photo));
+  }
+  if (who.frame && who.frame !== state.shown) show(who.frame);     // (which looks for its faces)
+  else loadFaces();
 }
 
 // the faces of the frame on screen, looked for by the server if nobody did
@@ -1281,12 +1322,38 @@ function showPeople() {
       typed.addEventListener("blur", () => { if (!typed.value.trim() && who.hidden) list(); });
       const chosenNew = () => !typed.hidden;
       for (const input of [typed, born]) input.addEventListener("keydown", (event) => { if (event.key === "Enter") give(); });
-      return el("div", { class: "who" }, el("span", { class: "n", text: String(k + 1) }), who, typed, born,
-        el("button", { class: "pill", type: "button", text: face.person && face.sure !== 1 ? "Oui" : "Nommer",
-                       title: face.person && face.sure !== 1 ? "Confirmer le nom proposé" : "Donner ce nom à ce visage", onclick: give }),
-        face.person && el("button", { class: "pill", type: "button", text: face.sure === 1 ? "Retirer" : "Non",
-                       title: face.sure === 1 ? "Retirer ce nom" : "Ce n'est pas cette personne", onclick: () => nameFace(face, "", "") }));
+      const said = face.person && (face.sure === 1
+        ? el("span", { class: "state sure", text: "✓ confirmé", title: "Nom donné ou confirmé par vous" })
+        : el("span", { class: "state " + (face.clear ? "clear" : "guess"), text: face.clear ? "très probable" : "à confirmer",
+                       title: `Nom proposé d'après les visages que vous avez nommés` + (face.likeness ? ` : ressemblance ${alike(face.likeness)}` : "") }));
+      const proposed = face.person && face.sure !== 1;
+      const row = el("div", { class: "who" + (face.person && face.person === state.faceFocus ? " focus" : "") });
+      // (a click is seen at once, before the server answers: the button, the
+      //   state of the row and the square on the face)
+      const yes = el("button", { class: "pill" + (proposed ? " go" : ""), type: "button", text: proposed ? "Oui" : "Nommer",
+                                 title: proposed ? `Oui, c'est ${face.person} (le nom ira dans les fichiers)` : "Donner ce nom à ce visage",
+                                 onclick: () => {
+                                   if (!chosen()) return;
+                                   yes.className = "pill done";
+                                   yes.disabled = true;
+                                   if (said) { said.className = "state sure"; said.textContent = "✓ confirmé"; }
+                                   Object.assign(face, { person: chosen(), sure: 1 });
+                                   drawFaces();
+                                   give();
+                                 } });
+      const no = face.person && el("button", { class: "pill", type: "button", text: face.sure === 1 ? "Retirer" : "Non",
+                                               title: face.sure === 1 ? "Retirer ce nom" : `Non, ce n'est pas ${face.person}`,
+                                               onclick: () => {
+                                                 no.disabled = yes.disabled = true;
+                                                 row.classList.add("off");
+                                                 nameFace(face, "", "");
+                                               } });
+      row.append(el("span", { class: "n", text: String(k + 1) }), who, typed, born, ...(said ? [said] : []), yes, ...(no ? [no] : []));
+      return row;
     }));
+  // (the face a click on a proposed name asked for, in view)
+  const focus = box.querySelector(".who.focus");
+  if (focus) focus.scrollIntoView({ block: "center", behavior: "smooth" });
 }
 
 // the buttons of the viewer: Claude describes the sequence where its files
@@ -1617,11 +1684,7 @@ function info(photo) {
   const people = split(photo.people), guessed = split(photo.guessed);
   if (state.facesCan || people.length || guessed.length) {
     out.push(heading("people", "Personnes"));
-    if (people.length || guessed.length) {
-      out.push(el("div", { class: "chips" },
-        people.map((name) => el("span", { class: "chip", text: name, title: "Toutes les photos de cette personne", onclick: () => setFilter({ person: name }) })),
-        guessed.map((name) => el("span", { class: "chip", text: name + " ?", title: "Nom proposé d'après les visages déjà nommés ; à confirmer", onclick: () => setFilter({ person: name }) }))));
-    }
+    if (people.length || guessed.length) out.push(peopleChips(photo, people, guessed));
     if (state.facesCan) {
       out.push(el("div", { class: "actions" }, el("button", { class: "pill", type: "button",
         text: facesOn() ? "Masquer les visages" : "Montrer les visages",

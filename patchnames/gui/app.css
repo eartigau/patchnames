@@ -1401,3 +1401,66 @@ button:focus-visible,
   padding: 1px 10px;
   font-size: 0.74rem;
 }
+
+/* the people of a sequence, and how sure each name is: confirmed by the
+   photographer (green), very clear (blue), proposed (orange, dashed) */
+.chip.person.sure {
+  color: #6ce2ad;
+  border-color: rgba(108, 226, 173, 0.55);
+  background: rgba(108, 226, 173, 0.08);
+}
+
+.chip.person.clear {
+  color: var(--accent);
+  border-color: rgba(98, 194, 255, 0.5);
+}
+
+.chip.person.guess {
+  color: #ffc46b;
+  border-color: rgba(255, 196, 107, 0.5);
+  border-style: dashed;
+}
+
+.face.clear {
+  border-color: var(--accent);
+}
+
+/* the face a click on its name asked for */
+.face.focus {
+  box-shadow: 0 0 0 1px rgba(4, 8, 16, 0.6), 0 0 0 4px rgba(255, 255, 255, 0.55);
+}
+
+.who {
+  flex-wrap: wrap;
+}
+
+.who.focus {
+  margin: 0 -6px 6px;
+  padding: 4px 6px;
+  border-radius: 8px;
+  background: rgba(98, 194, 255, 0.1);
+}
+
+.who .state {
+  flex: none;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
+.who .state.sure {
+  color: #6ce2ad;
+}
+
+.who .state.clear {
+  color: var(--accent);
+}
+
+.who .state.guess {
+  color: #ffc46b;
+}
+
+/* a face just refused or freed of its name: dimmed until the server answers */
+.who.off {
+  opacity: 0.45;
+}
