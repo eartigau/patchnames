@@ -2716,6 +2716,23 @@ ORIENT_SCHEMA = {'type': 'object', 'required': ['a_tourner'], 'properties': {'a_
         'sens': {'type': 'string', 'enum': ['horaire', 'antihoraire', 'demi-tour']}}}}}}
 
 
+def _thumb_read(name):
+    """whether the thumbnail of a photo can be read whole; one that cannot is
+    removed (the page makes the missing ones again)"""
+    from PIL import Image
+    path = photoindex.thumb_path(name)
+    try:
+        with Image.open(path) as img:
+            img.load()
+        return True
+    except OSError:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        return False
+
+
 def _orient_sheet(names, path):
     """the thumbnails of photos on one numbered sheet, for Claude to look at
     (each in a square, as it is, without being turned to fill it)"""
@@ -2782,7 +2799,12 @@ def orient(stop=None, tell=None, model=None, effort=None, most=None, dry=False, 
             for start in range(0, len(rows), ORIENT_SHEET):
                 if stop is not None and stop.is_set():
                     break
-                part = rows[start:start + ORIENT_SHEET]
+                # (a thumbnail that cannot be read, cut short by a write that did
+                #   not end, is left out: removed, the page makes it again, and
+                #   a later look takes it)
+                part = [row for row in rows[start:start + ORIENT_SHEET] if _thumb_read(row['name'])]
+                if not part:
+                    continue
                 sheet = os.path.join(tmpdir, f'planche_{start}.jpg')
                 _orient_sheet([row['name'] for row in part], sheet)
                 answer, cost = ask_claude(ORIENT_PROMPT.format(count=len(part), sheet=sheet), tmpdir,
