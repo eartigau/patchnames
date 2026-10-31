@@ -28,7 +28,10 @@ The page (gui/index.html, app.js) asks for:
                              to another
     /api/archive/look        (POST) use a copy, and list what it holds
     /api/running             what the server is doing in the background, and
-                             whether it calls Claude
+                             whether it calls Claude; the files that just went
+                             to the list of those with a problem, and how many
+                             are on it
+    /api/refused             that list (photoindex.refused)
     /api/orphans             (POST) compare two copies file by file for the
                              files only one has (sync.orphans), or show the
                              list found last in the Finder
@@ -151,6 +154,10 @@ _batch = {'waiting': [], 'active': [], 'total': 0, 'done': 0, 'failed': 0, 'note
 #:  _writing: the sequences whose files somebody is rewriting
 _writes = {'waiting': 0, 'seq': None, 'written': 0, 'files': 0, 'error': ''}
 _wake, _writing = threading.Event(), set()
+#: the files that just went to the list of those with a problem, for the page
+#:  to say it once: each stays REFUSAL_SHOWN seconds in what it gets (the list
+#:  stays in the index)
+_refusals, REFUSAL_SHOWN = [], 180
 #: the copy of the archive from one of its drives to another (sync.py):
 #:  'idle', 'planning' (rsync compares the two), 'planned' (what it would
 #:  bring), 'running', 'done', 'stopped' or 'error', with the counts
@@ -194,7 +201,8 @@ KEPT = 400
 #: the sequences of the archive that have no description: those of the batch
 #:  of the whole archive (the photos that wait to go there have a full path)
 ARCHIVE_TODO = ("FROM photos WHERE rep = 1 AND described IS NULL AND seq IS NOT NULL "
-                "AND path NOT LIKE '/%'")
+                "AND path NOT LIKE '/%' AND seq NOT IN (SELECT p.seq FROM refused r "
+                "JOIN photos p ON p.name = r.name WHERE r.kind = 'read' AND p.seq IS NOT NULL)")
 
 
 def _db():
@@ -866,7 +874,7 @@ def _work(seq, ask, write=True):
     and not at the drive's); its state goes to _jobs: 'running', 'writing'
     (with the photo as the index now has it, and how many files are
     written), 'done', or 'error'"""
-    from .doc import describe_sequence, write_sequence
+    from .doc import Refused, describe_sequence, write_sequence
     job = {'state': 'running' if ask else 'writing', 'since': time.time()}
 
     def tell(**changes):
@@ -885,9 +893,10 @@ def _work(seq, ask, write=True):
     try:
         if ask:
             # (the frames of a burst of bird photos are read one by one first)
+            # (write: asked by a click, a file on the list gets another try)
             _, cost = describe_sequence(
                 seq, progress=lambda done, total, stage=None: tell(measured=done, frames=total,
-                                                                   stage=stage))
+                                                                   stage=stage), retry=write)
             with _lock:
                 _spent['total'] += cost
             _day_spend(cost)
@@ -898,7 +907,9 @@ def _work(seq, ask, write=True):
         tell(state='writing', photo=photo(), written=0, files=0)
         _claim(seq, threading.Event())          # (waits for _resume to let go of it)
         try:
-            write_sequence(seq, progress=lambda done, total: tell(written=done, files=total))
+            # (asked by a click: a file on the list of those refused gets another try)
+            write_sequence(seq, progress=lambda done, total: tell(written=done, files=total),
+                           retry=True)
         except Exception as exc:
             tell(state='error', photo=photo(),
                  error=("La description est dans la base, mais l'écriture dans les fichiers a "
@@ -907,6 +918,11 @@ def _work(seq, ask, write=True):
         finally:
             _release(seq)
         tell(state='done', photo=photo())
+    except Refused as exc:
+        # (a click is told in its panel; a batch says it once, see _refused_once)
+        if not write:
+            _refused_once(exc)
+        tell(state='error', error=str(exc), refused=True)
     except Exception as exc:
         tell(state='error', error=str(exc))
 
@@ -1154,6 +1170,11 @@ def _batch_worker():
                 _batch['retry'] = {}
                 continue
             error = job.get('error') or 'échec'
+            if job.get('refused'):
+                # (on the list of the files with a problem: another try would
+                #   not mend it, and it says nothing of Claude or of the drive)
+                _batch_done(seq, None, error)
+                continue
             if seq in _batch['again']:
                 _batch_done(seq, None, error)
             else:
@@ -1201,12 +1222,19 @@ def _batch_status(since=0):
                 'archive': {'on': running and _batch['archive'], 'left': left}}
 
 
+def _refused_once(exc):
+    """say once the files that just went to the list of those with a problem:
+    they are not tried again"""
+    _refusals.extend({'name': name, 'why': why, 'until': time.time() + REFUSAL_SHOWN}
+                     for name, why in exc.files.items())
+
+
 def _resume(stop):
     """write into their files what the index learned of sequences without
     writing it yet: those a stopped server left waiting, and those whose
     people were just named; looks again every half minute, when the archive
     is there"""
-    from .doc import pending_writes, write_sequence
+    from .doc import Refused, pending_writes, write_sequence
     while not stop.is_set():
         _wake.clear()
         # (not while the files are being copied from a drive to the other)
@@ -1223,6 +1251,9 @@ def _resume(stop):
                 write_sequence(seq, progress=lambda done, total: _writes.update(written=done,
                                                                                 files=total))
                 _writes['error'] = ''
+            except Refused as exc:
+                _writes['error'] = ''
+                _refused_once(exc)
             except Exception as exc:
                 _writes['error'] = f'{seq} : {exc}'
             finally:
@@ -1356,7 +1387,21 @@ class Handler(BaseHTTPRequestHandler):
             elif url.path == '/api/orient':
                 self._send(200, _orient_status())
             elif url.path == '/api/running':
-                self._send(200, {'jobs': _running()})
+                now = time.time()
+                _refusals[:] = [said for said in _refusals if said['until'] > now]
+                db = _db()
+                try:
+                    count = db.execute('SELECT COUNT(*) FROM refused').fetchone()[0]
+                except sqlite3.Error:
+                    count = 0       # (an index from before this)
+                db.close()
+                self._send(200, {'jobs': _running(), 'refusals': list(_refusals), 'refused': count})
+            elif url.path == '/api/refused':
+                db = _db()
+                try:
+                    self._send(200, {'files': photoindex.refused(db)})
+                finally:
+                    db.close()
             elif url.path == '/api/people':
                 # the people of a sequence: confirmed, very clear, or proposed
                 from . import faces

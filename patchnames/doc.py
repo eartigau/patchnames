@@ -721,13 +721,39 @@ def answer_of(row):
             'certitude': row['certainty'] or 'sûre', 'autres_mots_cles': parts('keywords')}
 
 
+#: what Pillow says of a picture it will never read, however often it is
+#:  asked (what a drive that went away gives is another error)
+UNREADABLE = ('broken data stream', 'cannot identify image file', 'image file is truncated')
+#: what exiftool says of a file it will never write, however often it is
+#:  asked (the other files of its run are written all the same)
+REFUSAL = re.compile(r'^Error: (Not a valid .+?|Writing of .+? not (?:yet )?supported\S*) - (.+)$',
+                     re.M)
+
+
+class Refused(RuntimeError):
+    """exiftool will not write these files, or their pictures cannot be read,
+    {file name: why, said in French}; other: what else exiftool complained of"""
+
+    def __init__(self, files, other=()):
+        self.files, self.other = files, list(other)
+        super().__init__(' ; '.join(f'{name} : {why}' for name, why in files.items()))
+
+
+def _refusal(said):
+    """what exiftool's refusal means, in French, with its own words"""
+    if said.startswith('Not a valid'):
+        return f"son contenu ne correspond pas à son extension ; exiftool refuse d'y écrire ({said})"
+    return f"exiftool ne sait pas écrire dans ce genre de fichier ({said})"
+
+
 def write_groups(groups, rows, backup=True, most=40):
     """write tags into files with exiftool, [(arguments, files)], each group
     with its own tags, `most` groups to a run of exiftool (on the server of
     the archive when it has exiftool: the files are rewritten where they
     are, without coming here and going back). The latitude and longitude
     are left out for the files that carry a position of their own; raises
-    RuntimeError."""
+    RuntimeError, Refused when exiftool will never write some of the files
+    (the others are written)."""
     head = ['-q', '-m'] + ([] if backup else ['-overwrite_original'])
     blocks = []
     for args, names in groups:
@@ -737,10 +763,17 @@ def write_groups(groups, rows, backup=True, most=40):
                             ([n for n in names if own_position(rows.get(n, {}))], [])):
             if part:
                 blocks.append((head + rest + extra, part))
+    refused, other = {}, []
     for start in range(0, len(blocks), most):
         code, _, err, _ = remote.run_many(blocks[start:start + most])
         if code != 0:
-            raise RuntimeError(f'exiftool : {err.strip()[:300]}')
+            found = {os.path.basename(path): _refusal(said) for said, path in REFUSAL.findall(err)}
+            if not found:
+                raise RuntimeError(f'exiftool : {err.strip()[:300]}')
+            refused.update(found)
+            other += [line for line in err.splitlines() if line.strip() and not REFUSAL.match(line)]
+    if refused:
+        raise Refused(refused, other)
 
 
 def write_files(args, names, rows, backup=True):
@@ -2209,7 +2242,7 @@ def _archive_pictures(frames, full, tmpdir, row, sheet):
     return paths
 
 
-def describe_sequence(seq_id, model=None, effort=None, sheet=12, progress=None):
+def describe_sequence(seq_id, model=None, effort=None, sheet=12, progress=None, retry=False):
     """Have Claude describe one sequence of the index, where its files are
     (the button of the search page): its row in the index, as a dict, and the
     cost in dollars at API prices. The answer goes to the index, and waits
@@ -2217,7 +2250,10 @@ def describe_sequence(seq_id, model=None, effort=None, sheet=12, progress=None):
     of bird photos is read, to note each one (progress(done, total) as they
     are, then progress(total, total, 'yeux') when Claude takes its second
     look, at the eyes); of another sequence, only the middle frame. Raises RuntimeError
-    when the sequence cannot be read (the archive drive is not mounted)."""
+    when the sequence cannot be read (the archive drive is not mounted), Refused
+    when the picture of the frame it needs never will be: that file goes to the
+    list of the index (photoindex.refused), left alone from then on unless retry
+    (asked by a click)."""
     cfg = _cfg()
     path = write_template(instructions_path(), quiet=True)
     with open(os.path.expanduser(path)) as handle:
@@ -2227,6 +2263,10 @@ def describe_sequence(seq_id, model=None, effort=None, sheet=12, progress=None):
     if not frames:
         raise RuntimeError('séquence inconnue')
     names = [frame['name'] for frame in frames]
+    if retry:
+        db.executemany("DELETE FROM refused WHERE name = ? AND kind = 'read'",
+                       [(name,) for name in names])
+        db.commit()
     middle = frames[len(frames) // 2]
     full = photoindex.resolve(middle['path'])
     if not full:
@@ -2287,7 +2327,15 @@ def describe_sequence(seq_id, model=None, effort=None, sheet=12, progress=None):
                 lambda name, img, big: photoindex.save_images(img, name, preview=big), progress,
                 jobs=READS)
         else:
-            images = _archive_pictures(frames, full, tmpdir, rows[middle['name']], sheet)
+            try:
+                images = _archive_pictures(frames, full, tmpdir, rows[middle['name']], sheet)
+            except OSError as exc:
+                if not any(said in str(exc) for said in UNREADABLE):
+                    raise
+                why = {middle['name']: "son image ne se lit pas, Claude ne peut pas la décrire "
+                                       f"({str(exc).replace(repr(str(full)), '').strip()})"}
+                photoindex.refuse(db, why, 'read')
+                raise Refused(why) from None
         if not bird and faces.available():
             # who is in the picture, from the faces named in the search page
             from PIL import Image
@@ -2431,7 +2479,7 @@ def correct_species(seq_id, old, new):
         db.close()
 
 
-def write_sequence(seq_id, progress=None, chunk=6):
+def write_sequence(seq_id, progress=None, chunk=6, retry=False):
     """Write into the files of a sequence what the index says of it: Claude's
     description if it has one, the place, the latitude and longitude of its
     eBird checklist, and the checklist as the event; photos that carry their
@@ -2439,7 +2487,10 @@ def write_sequence(seq_id, progress=None, chunk=6):
     where they are, a few at a time (progress(done, total) after each), and
     marked in the index as they go, so that a write cut short is finished
     later; no <file>_original copy is left in the archive unless config
-    'gui_backup'. Returns the number of files written; raises RuntimeError."""
+    'gui_backup'. A file exiftool will never write goes to the list of the
+    index (photoindex.refused) and is left alone from then on, unless retry
+    (asked by a click); the others are written, then Refused says which went
+    to the list. Returns the number of files written; raises RuntimeError."""
     cfg = _cfg()
     db = photoindex.connect()
     frames = photoindex.sequence(db, seq_id)
@@ -2450,8 +2501,16 @@ def write_sequence(seq_id, progress=None, chunk=6):
     checklist = data.lists.get(row['checklist']) if data and row['checklist'] else None
     said = dict(row, note=row['note'] or '')
     paths = {frame['name']: photoindex.resolve(frame['path']) for frame in frames}
-    todo = [name for name in paths if paths[name]]
+    if retry:
+        db.executemany("DELETE FROM refused WHERE name = ? AND kind = 'write'",
+                       [(name,) for name in paths])
+        db.commit()
+    barred = {found['name'] for found in photoindex.refused(db, 'write')} & set(paths)
+    todo = [name for name in paths if paths[name] and name not in barred]
     if not todo:
+        if barred:
+            db.close()
+            return 0
         raise RuntimeError("les fichiers sont hors d'atteinte (le disque d'archive est-il monté ?)")
     # the frames of a burst each have their notes: they are written by groups
     #   of frames that share them
@@ -2497,21 +2556,34 @@ def write_sequence(seq_id, progress=None, chunk=6):
         said['_size'] = None
     db.execute("UPDATE photos SET written = 'pending' WHERE seq = ?", (seq_id,))
     db.commit()
-    done = 0
+    done, refused = 0, {}
     for start in range(0, len(todo), chunk):
         # (each frame its own tags, a few frames to a run of exiftool)
         part = todo[start:start + chunk]
-        # (what is taken out first: a place found since is written after it, and stays)
-        write_groups([(clear + file_tags(answer_of(row), dict(said, **mine), checklist),
-                       [paths[name] for name in group]) for mine, group in _groups_of(part, notes)],
-                     rows, backup=bool(cfg.get('gui_backup')))
-        db.execute(f'UPDATE photos SET written = ? WHERE name IN ({", ".join("?" * len(part))})',
-                   [datetime.now().isoformat(' ', 'seconds')] + part)
-        db.commit()
+        try:
+            # (what is taken out first: a place found since is written after it, and stays)
+            write_groups([(clear + file_tags(answer_of(row), dict(said, **mine), checklist),
+                           [paths[name] for name in group])
+                          for mine, group in _groups_of(part, notes)],
+                         rows, backup=bool(cfg.get('gui_backup')))
+        except Refused as exc:
+            bad = {name: exc.files[os.path.basename(paths[name])] for name in part
+                   if os.path.basename(paths[name]) in exc.files}
+            photoindex.refuse(db, bad, 'write')
+            refused.update(bad)
+            if exc.other:
+                raise RuntimeError(f"exiftool : {' ; '.join(exc.other)[:300]}") from None
+            part = [name for name in part if name not in bad]
+        if part:
+            db.execute(f'UPDATE photos SET written = ? WHERE name IN ({", ".join("?" * len(part))})',
+                       [datetime.now().isoformat(' ', 'seconds')] + part)
+            db.commit()
         done += len(part)
         if progress:
             progress(done, len(todo))
     db.close()
+    if refused:
+        raise Refused(refused)
     return done
 
 
@@ -2954,7 +3026,8 @@ def pending_writes():
     """the sequences whose files still wait for what the index says of them"""
     db = photoindex.connect()
     seqs = [row[0] for row in db.execute(
-        "SELECT DISTINCT seq FROM photos WHERE written = 'pending' AND seq IS NOT NULL")]
+        "SELECT DISTINCT seq FROM photos WHERE written = 'pending' AND seq IS NOT NULL "
+        "AND name NOT IN (SELECT name FROM refused WHERE kind = 'write')")]
     db.close()
     return seqs
 

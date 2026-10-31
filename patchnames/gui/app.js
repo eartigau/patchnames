@@ -346,8 +346,12 @@ async function showRunning() {
   let data;
   try { data = await (await fetch("/api/running")).json(); } catch (err) { data = null; }
   if (data && Array.isArray(data.jobs)) {
-    $("running").hidden = !data.jobs.length;
-    $("runningList").replaceChildren(...data.jobs.map((job) => el("span", { class: "job" + (job.claude ? " claude" : "") },
+    const refusals = data.refusals || [];
+    $("running").hidden = !data.jobs.length && !refusals.length;
+    if (data.refused !== undefined) showProblems(data.refused);
+    $("runningList").replaceChildren(...refusals.map((said) => el("span", { class: "job refused",
+      text: `Mis sur la liste des fichiers à problème : ${said.name} : ${said.why}` })),
+      ...data.jobs.map((job) => el("span", { class: "job" + (job.claude ? " claude" : "") },
       ...(job.claude ? [el("span", { class: "who", text: "Claude", title: "Ce travail appelle Claude : il compte dans votre allocation" })] : []),
       el("span", { text: job.text }),
       ...(job.stop ? [el("button", { class: "pill", type: "button", text: "Arrêter",
@@ -358,6 +362,34 @@ async function showRunning() {
   }
   // (a server from before this has no such list: the strip stays hidden)
   if (data && Array.isArray(data.jobs)) running.timer = setTimeout(showRunning, 4000);
+}
+
+// the files exiftool will not write or whose picture cannot be read, kept in
+// the index: how many, and the list on demand. Each was said once as it went
+// there; none is tried again unless a button of its photo is clicked or the
+// file changes name
+const problems = { count: -1, open: false, files: [] };
+
+async function showProblems(count) {
+  if (count === problems.count) return;
+  problems.count = count;
+  $("problems").hidden = !count;
+  try { problems.files = (await (await fetch("/api/refused")).json()).files || []; } catch (err) { return; }
+  drawProblems();
+  const photo = state.items[state.current];
+  if (photo) $("viewerInfo").replaceChildren(...info(photo));
+}
+
+function drawProblems() {
+  $("problemsCount").replaceChildren(el("span", { class: "mono", text: plural(problems.count, "fichier écarté", "fichiers écartés") + " : ils ne sont plus réessayés tout seuls" }),
+    el("button", { class: "pill", type: "button", text: problems.open ? "Masquer la liste" : "Voir la liste",
+                   onclick: () => { problems.open = !problems.open; drawProblems(); } }));
+  $("problemsList").hidden = !problems.open;
+  $("problemsList").replaceChildren(...problems.files.map((file) => el("li", {},
+    el("a", { href: "#", text: file.path || file.name, title: "Chercher cette photo dans la galerie",
+              // (the search finds a file by its name without its extension)
+              onclick: (event) => { event.preventDefault(); setFilter({ q: file.name.replace(/\.\w+$/, "") }); } }),
+    el("span", { class: "mono", text: ` : ${file.why} (${file.since})` }))));
 }
 
 // seconds as a clock: 75 -> "1:15", 3700 -> "1 h 01"
@@ -1673,6 +1705,7 @@ function info(photo) {
     const when = /^\d{4}-\d\d-\d\d \d\d:\d\d/.test(photo.written || "")
       ? ` le ${photo.written.slice(0, 10)} à ${photo.written.slice(11, 16)}` : "";
     const writable = photo.described || photo.checklist;
+    const refusedHere = problems.files.filter((file) => file.seq === photo.seq);
     out.push(el("div", { class: "block" }, el("div", { class: "actions" },
       el("button", { class: "pill go", type: "button", disabled: photo.busy && "disabled",
                      text: photo.doing === "describe" ? "Identification en cours…"
@@ -1682,13 +1715,16 @@ function info(photo) {
       writable && el("button", { class: "pill " + (wrote && !photo.doing ? "done" : "go"), type: "button", disabled: photo.busy && "disabled",
                      text: photo.doing === "write" ? "Écriture en cours…"
                        : wrote ? "✓ Déjà écrit dans les fichiers"
+                       : refusedHere.some((file) => file.kind === "write") ? "Réessayer d'écrire dans les fichiers"
                        : waits ? "Écrire dans les fichiers (en attente)" : "Écrire dans les fichiers",
                      title: (wrote ? `Les fichiers de la séquence portent déjà ce que la base en sait${when ? " : écrit" + when : ""}. Un clic l'écrit de nouveau. `
                        : waits ? "Les fichiers attendent encore ce que dit la base : l'écriture reprendra toute seule, un clic la fait tout de suite. "
                        : "Ce que dit la base n'a pas encore été écrit dans ces fichiers. ")
                        + "Ce qui s'écrit dans leur en-tête : description, lieu, latitude et longitude de la liste eBird (sans appeler Claude).",
                      onclick: () => work(photo, "write") })),
-      el("p", { class: "mono", text: photo.job || (waits
+      el("p", { class: "mono", text: photo.job || (refusedHere.length
+        ? `Sur la liste des fichiers à problème : ${refusedHere.map((file) => `${file.name} : ${file.why}`).join(" ; ")}. Ce n'est plus réessayé tout seul ; les boutons ci-dessus le retentent.`
+        : waits
         ? "Les fichiers attendent encore ce que dit la base ; l'écriture reprendra toute seule."
         : wrote ? (when ? `Écrit dans les fichiers${when}.` : "Les fichiers de la séquence portent déjà cette description.")
         : writable ? "Pas encore écrit dans les fichiers." : "") })));

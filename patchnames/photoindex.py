@@ -30,6 +30,7 @@ find the photos taken during a checklist that holds a species.
 import os
 import sqlite3
 import unicodedata
+from datetime import datetime
 
 from . import config as _config_module
 
@@ -120,6 +121,8 @@ CREATE TABLE IF NOT EXISTS meta {TABLES['meta']};
 CREATE TABLE IF NOT EXISTS geocode (cell TEXT PRIMARY KEY, answer TEXT);
 CREATE TABLE IF NOT EXISTS absent (copy TEXT, name TEXT, PRIMARY KEY (copy, name)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS from_card (key TEXT PRIMARY KEY, path TEXT, copied TEXT) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS refused (name TEXT, kind TEXT, why TEXT, since TEXT,
+    PRIMARY KEY (name, kind)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS people (id INTEGER PRIMARY KEY, name TEXT UNIQUE, born TEXT);
 CREATE TABLE IF NOT EXISTS faces (id INTEGER PRIMARY KEY, photo TEXT, x REAL, y REAL, w REAL,
     h REAL, score REAL, vector BLOB, taken TEXT, person INTEGER, sure INTEGER DEFAULT 0,
@@ -373,6 +376,8 @@ def rename(db, moved):
         if new == old:
             continue
         db.execute('UPDATE tags SET name = ? WHERE name = ?', (new, old))
+        # (under its new name, a file refused gets another try)
+        db.execute('DELETE FROM refused WHERE name = ?', (old,))
         if row['seq'] == before:
             db.execute('UPDATE photos SET seq = ? WHERE seq = ?', (stem, before))
         for kept in (thumb_path, preview_path, eye_path):
@@ -396,9 +401,30 @@ def forget(db, names):
         seqs.add(row['seq'])
         db.execute('DELETE FROM search WHERE rowid = ?', (row['id'],))
         db.execute('DELETE FROM tags WHERE name = ?', (name,))
+        db.execute('DELETE FROM refused WHERE name = ?', (name,))
         db.execute('DELETE FROM photos WHERE name = ?', (name,))
     _derive(db, _tidy(db, seqs - {None}))
     db.commit()
+
+
+def refuse(db, files, kind):
+    """keep in the list of the files with a problem that trying again does
+    not mend ({name: why}): kind 'write', exiftool will not write it, 'read',
+    its picture cannot be read. Nothing tries them again until asked to
+    (doc.write_sequence, doc.describe_sequence), or until they change name"""
+    when = datetime.now().isoformat(' ', 'minutes')
+    db.executemany('INSERT OR REPLACE INTO refused VALUES (?, ?, ?, ?)',
+                   [(name, kind, why, when) for name, why in files.items()])
+    db.commit()
+
+
+def refused(db, kind=None):
+    """that list, the latest first: [{'name', 'kind', 'why', 'since', 'seq',
+    'path'}]; kind: only those"""
+    return [dict(row) for row in db.execute(
+        'SELECT r.name, r.kind, r.why, r.since, p.seq, p.path FROM refused r '
+        'LEFT JOIN photos p ON p.name = r.name WHERE ? IS NULL OR r.kind = ? '
+        'ORDER BY r.since DESC, r.name', (kind, kind))]
 
 
 def place_text(record):
