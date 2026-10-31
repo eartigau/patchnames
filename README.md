@@ -770,6 +770,15 @@ l'appel à Claude le demandent.
 - **Le sablier.** Dans la visionneuse, une vue dont l'aperçu n'est pas
   encore gardé est lue dans la photo elle-même, ce qui prend un moment sur
   un disque réseau : un sablier le dit, sur la vue d'avant assombrie.
+- **Les fichiers à problème.** Un fichier qu'un nouvel essai ne réparera pas
+  est dit une seule fois, dans la ligne « En cours », puis gardé sur une liste
+  dans la base (« Fichiers à problème », avec un lien vers chaque photo) : un
+  fichier dans lequel exiftool refuse d'écrire (une image AVIF nommée `.jpg`,
+  par exemple) ou dont l'image ne se lit pas. Il n'est plus réessayé tout seul
+  et, à la lecture, ne compte plus dans les échecs à répétition qui mettent la
+  file en pause ; les autres vues de sa séquence sont traitées normalement.
+  Les boutons « Identifier… » et « Réessayer d'écrire… » de sa photo le
+  retentent, et un fichier qui change de nom quitte la liste.
 - **Ce qui tourne.** En haut du panneau, la ligne « En cours » dit ce que
   la page fait en arrière-plan : descriptions, redressement, écriture dans
   les fichiers, copies, vignettes, visages. Ce qui appelle Claude, et
