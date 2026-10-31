@@ -50,7 +50,9 @@ db = sqlite3.connect('file:' + os.path.expanduser('~/patchdoc/photos.sqlite') + 
 db.row_factory = sqlite3.Row
 rows = db.execute("SELECT * FROM photos WHERE seq IN (SELECT seq FROM photos WHERE described > ? "
                   "AND described != 'file')", (sys.argv[1],)).fetchall()
-json.dump([dict(row) for row in rows], sys.stdout)
+refused = db.execute("SELECT name, why FROM refused WHERE kind = 'write'").fetchall()
+json.dump({'rows': [dict(row) for row in rows], 'refused': {row['name']: row['why'] for row in refused}},
+          sys.stdout)
 """
 
 
@@ -202,12 +204,15 @@ def fetch(host=None):
     db = photoindex.connect()
     since = photoindex.meta('worker_since') or '2000'
     found = ssh(host, f'test -f {INDEX}/photos.sqlite && python3 -c {shlex.quote(EXPORT)} {shlex.quote(since)}')
-    rows = json.loads(found.stdout) if found.stdout.strip() else []
+    said = json.loads(found.stdout) if found.stdout.strip() else {'rows': [], 'refused': {}}
+    refused = said['refused']
     seqs = {}
-    for row in rows:
+    for row in said['rows']:
         seqs.setdefault(row['seq'], []).append(row)
+    # (a file exiftool will never write does not hold back the others of its
+    #   sequence: it goes on the list of the files with a problem here too)
     ready = {seq: group for seq, group in seqs.items()
-             if not any(row['written'] == 'pending' for row in group)}
+             if not any(row['written'] == 'pending' and row['name'] not in refused for row in group)}
     records, kept = [], 0
     for seq, group in ready.items():
         here = db.execute('SELECT MAX(described) AS described, MAX(verified) AS verified FROM photos '
@@ -220,6 +225,8 @@ def fetch(host=None):
         records += [{key: value for key, value in row.items() if key not in KEEP} for row in group]
     if records:
         photoindex.put(db, records)
+    photoindex.refuse(db, {record['name']: refused[record['name']] for record in records
+                           if record['name'] in refused}, 'write')
     waiting = [str(row['described']) for seq, group in seqs.items() if seq not in ready for row in group
                if row['described'] and row['described'] != 'file']
     done = [str(row['described']) for group in ready.values() for row in group
