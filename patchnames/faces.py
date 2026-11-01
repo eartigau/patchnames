@@ -15,6 +15,7 @@ the photographer confirms or refuses it; only confirmed names are written
 into the files. Each answer is kept with the likeness it was given to
 (table face_answers), which says from what likeness a name can be trusted;
 draw_check() draws faces at random to measure that (table face_check).
+board() gives the faces to confirm in one go, those that help most first.
 
 People change, children fast, and the photos of a family go back to before
 the children were born. So an example only speaks for the years around its
@@ -27,6 +28,7 @@ and forward towards the teenager. A few names given at different ages
 anchor the walk; that is the way to help it.
 """
 
+import collections
 import os
 import threading
 import urllib.request
@@ -56,6 +58,8 @@ CLEAR = 0.70
 #:  more, 2 in 110 at 0.80 (the sisters, and faces of people not yet named):
 #:  too few to say how far 0.85 can be trusted, which these answers will
 CHECK = (0.85, 0.05, 150)
+#: the faces of a board of confirmation, and how many for one person in one year
+BOARD = (48, 6)
 
 _lock, _nets, _early = threading.Lock(), {}, threading.Lock()
 
@@ -237,11 +241,33 @@ def sync(db, photos):
 def name(db, face, person, born=None):
     """the photographer says who a face is (person: '' to take the name
     off, or to refuse the one proposed); the photos to show again"""
+    return answers(db, [(face, person, born)])
+
+
+def answers(db, said):
+    """what the photographer said of faces, [(face, person, year of birth)],
+    kept together, then the proposals of their photos made again; the photos
+    to show again. The whole base follows in the background."""
+    photos = {_answer(db, face, person, born) for face, person, born in said} - {None}
+    db.commit()
+    if not photos:
+        return set()
+    # (at once for the faces of these photos: one person is once in a photo;
+    #   the others in the background)
+    changed = recognise(db, photos) | photos
+    sync(db, changed)
+    later()
+    return changed
+
+
+def _answer(db, face, person, born=None):
+    """keep what the photographer said of a face, without committing; its
+    photo, None for a face unknown"""
     row = db.execute('SELECT f.photo, f.person, f.sure, f.banned, f.likeness, p.name AS proposed '
                      'FROM faces f LEFT JOIN people p ON p.id = f.person WHERE f.id = ?',
                      (face,)).fetchone()
     if row is None:
-        return set()
+        return None
     person = ' '.join((person or '').split())
     # what was proposed and what the photographer said: its likeness goes
     #   with the proposal, and this is the only place that remembers it
@@ -265,13 +291,7 @@ def name(db, face, person, born=None):
             refused = ','.join(filter(None, [refused, str(row['person'])]))
         db.execute('UPDATE faces SET person = NULL, sure = 0, likeness = NULL, banned = ? '
                    'WHERE id = ?', (refused, face))
-    db.commit()
-    # (at once for the faces of this photo: one person is once in a photo;
-    #   the others in the background)
-    changed = recognise(db, {row['photo']}) | {row['photo']}
-    sync(db, changed)
-    later()
-    return changed
+    return row['photo']
 
 
 #: the background recognise() of every face: whether one runs, and whether
@@ -309,6 +329,46 @@ def _later_job():
             pass            # (the next name given asks again)
         finally:
             db.close()
+
+
+def board(db, count=BOARD[0], person=''):
+    """the proposed faces to confirm in one go, as the page shows them, one
+    to a sequence: first those of the people and the years that have the
+    fewest confirmed faces (where a confirmation helps most), the most alike
+    first among them, BOARD[1] at most for a person in a year. person: only
+    this one. Also how many names wait, in all and for that person."""
+    rows = db.execute(
+        'SELECT f.id AS face, f.person AS who, p.name AS person, f.likeness, f.photo, f.taken, ph.seq '
+        'FROM faces f JOIN people p ON p.id = f.person LEFT JOIN photos ph ON ph.name = f.photo '
+        # (a face already answered does not come back, under another name either)
+        "WHERE f.sure != 1 AND COALESCE(f.banned, '') = ''").fetchall()
+    known = collections.Counter()
+    for row in db.execute('SELECT person, taken FROM faces WHERE sure = 1 AND person IS NOT NULL'):
+        known[row['person'], (row['taken'] or '')[:4]] += 1
+
+    def near(row):
+        """the confirmed faces of that person in that year and the years beside it"""
+        year = (row['taken'] or '')[:4]
+        if not year.isdigit():
+            return 99
+        return sum(known[row['who'], str(int(year) + by)] for by in (-1, 0, 1))
+
+    waiting = [row for row in rows if not person or row['person'] == person]
+    cards, seqs, years = [], set(), collections.Counter()
+    for row in sorted(waiting, key=lambda row: (min(near(row), 6), -(row['likeness'] or 0))):
+        seq, year = row['seq'] or row['photo'], (row['who'], (row['taken'] or '')[:4])
+        if seq not in seqs and years[year] < BOARD[1]:
+            seqs.add(seq)
+            years[year] += 1
+            cards.append({'face': row['face'], 'person': row['person'], 'likeness': row['likeness'],
+                          'photo': row['photo'], 'year': year[1], 'near': near(row)})
+            if len(cards) >= count:
+                break
+    said = db.execute('SELECT COUNT(*), SUM(proposed = given) FROM face_answers '
+                      'WHERE proposed IS NOT NULL').fetchone()
+    names = collections.Counter(row['person'] for row in rows)
+    return {'cards': cards, 'waiting': len(rows), 'names': names.most_common(), 'answered': said[0],
+            'right': said[1] or 0}
 
 
 def _rivals(db, faces):
