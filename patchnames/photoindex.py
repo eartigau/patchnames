@@ -129,7 +129,7 @@ CREATE TABLE IF NOT EXISTS faces (id INTEGER PRIMARY KEY, photo TEXT, x REAL, y 
     likeness REAL, banned TEXT);
 CREATE INDEX IF NOT EXISTS faces_photo ON faces (photo);
 CREATE TABLE IF NOT EXISTS face_answers (id INTEGER PRIMARY KEY, face INTEGER, photo TEXT,
-    proposed TEXT, likeness REAL, given TEXT, answered TEXT);
+    proposed TEXT, likeness REAL, given TEXT, answered TEXT, pushed_by INTEGER);
 CREATE TABLE IF NOT EXISTS face_check (face INTEGER PRIMARY KEY, drawn TEXT, person TEXT,
     likeness REAL, gap REAL, answer TEXT, answered TEXT);
 """
@@ -190,6 +190,9 @@ def connect():
         #   were those without a checklist
         with db:
             db.execute("UPDATE photos SET own_position = 1 WHERE match = 'gps'")
+    # (a table of the faces made before it said what a push came from)
+    if 'pushed_by' not in {row['name'] for row in db.execute('PRAGMA table_info(face_answers)')}:
+        db.execute('ALTER TABLE face_answers ADD COLUMN pushed_by INTEGER')
     _relative(db)
     return db
 

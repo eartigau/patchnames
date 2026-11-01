@@ -32,7 +32,7 @@ import collections
 import os
 import threading
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from . import photoindex
 
@@ -60,6 +60,12 @@ CLEAR = 0.70
 CHECK = (0.85, 0.05, 150)
 #: the faces of a board of confirmation, and how many for one person in one year
 BOARD = (48, 6)
+#: an answer goes for the faces of the same moment (this many seconds apart, or
+#:  the same sequence) at least this alike the face answered. Faces of one
+#:  moment share age and light: measured on 2026-11-01 on the 467 faces
+#:  confirmed, of 324 pairs of different people of the same day none reached
+#:  0.50, and 148 of 221 pairs of the same person reached 0.60
+PUSH, MOMENT = 0.60, 12 * 3600
 
 _lock, _nets, _early = threading.Lock(), {}, threading.Lock()
 
@@ -241,28 +247,115 @@ def sync(db, photos):
 def name(db, face, person, born=None):
     """the photographer says who a face is (person: '' to take the name
     off, or to refuse the one proposed); the photos to show again"""
-    return answers(db, [(face, person, born)])
+    return answers(db, [(face, person, born)])['changed']
 
 
 def answers(db, said):
     """what the photographer said of faces, [(face, person, year of birth)],
-    kept together, then the proposals of their photos made again; the photos
-    to show again. The whole base follows in the background."""
-    photos = {_answer(db, face, person, born) for face, person, born in said} - {None}
+    kept together and pushed to the faces of the same moment (_push), then
+    the proposals of their photos made again: {'changed': the photos to show
+    again, 'pushed': [{'face', 'person'}], person '' for a name refused}.
+    The whole base follows in the background."""
+    done = [(face, _answer(db, face, person, born)) for face, person, born in said]
+    done = [(face, kept) for face, kept in done if kept]
+    photos, pushed = {kept['photo'] for _, kept in done}, []
+    for face, kept in done:
+        pushed += _push(db, face, kept)
     db.commit()
     if not photos:
-        return set()
+        return {'changed': set(), 'pushed': []}
+    photos |= {row['photo'] for row in db.execute(
+        f"SELECT photo FROM faces WHERE id IN ({', '.join('?' * len(pushed))})",
+        [one['face'] for one in pushed])} if pushed else set()
     # (at once for the faces of these photos: one person is once in a photo;
     #   the others in the background)
     changed = recognise(db, photos) | photos
     sync(db, changed)
     later()
-    return changed
+    return {'changed': changed, 'pushed': pushed}
+
+
+def _push(db, face, kept):
+    """what the photographer just said of a face goes for the faces of the
+    same moment that are at least PUSH alike it and still have no answer. A
+    name given is given to them too, if their photo does not have that person
+    already and they do not look as much like somebody else confirmed in that
+    moment; a name refused is refused for those it was proposed for. Only the
+    answer pushes, not what it pushed: the faces reached are said to come from
+    it (face_answers.pushed_by). What was pushed: [{'face', 'person'}]."""
+    import numpy as np
+    me = db.execute('SELECT f.vector, f.taken, ph.seq FROM faces f LEFT JOIN photos ph '
+                    'ON ph.name = f.photo WHERE f.id = ?', (face,)).fetchone()
+    given, refused = kept['given'], kept['proposed'] if not kept['given'] else None
+    if not given and not refused:
+        return []       # (a name taken off a confirmed face says nothing of the others)
+    when = _moment(me['taken'])
+    days = [] if when is None else [str((when + timedelta(days=by)).date()) for by in (-1, 0, 1)]
+    marks = ', '.join('?' * len(days)) or "''"
+    rows = db.execute(
+        f'SELECT f.id, f.photo, f.vector, f.taken, f.person, f.sure, f.banned, f.likeness, p.name AS proposed '
+        f'FROM faces f LEFT JOIN photos ph ON ph.name = f.photo LEFT JOIN people p ON p.id = f.person '
+        f'WHERE f.id != ? AND (ph.seq = ? OR substr(f.taken, 1, 10) IN ({marks}))',
+        [face, me['seq']] + days).fetchall()
+    mine = np.frombuffer(me['vector'], dtype='float32')
+
+    def vector(row):
+        return np.frombuffer(row['vector'], dtype='float32')
+
+    def close(row):
+        there = _moment(row['taken'])
+        return there is None or when is None or abs((there - when).total_seconds()) <= MOMENT
+
+    rows = [row for row in rows if close(row)]
+    who = None
+    if given:
+        who = db.execute('SELECT id FROM people WHERE name = ?', (given,)).fetchone()['id']
+    held = {row['photo'] for row in rows if row['sure'] == 1 and row['person'] == who}
+    others = [row for row in rows if row['sure'] == 1 and row['person'] not in (None, who)]
+    found = {}
+    for row in rows:
+        likeness = float(vector(row) @ mine)
+        if row['sure'] == 1 or likeness < PUSH or row['photo'] == kept['photo']:
+            continue
+        if given:
+            if row['photo'] in held or str(who) in (row['banned'] or '').split(','):
+                continue
+            if any(float(vector(row) @ vector(other)) >= PUSH for other in others):
+                continue
+            # (one person is once in a photo: the most alike)
+            if row['photo'] not in found or likeness > found[row['photo']][0]:
+                found[row['photo']] = (likeness, row)
+        elif row['person'] == refused:
+            found[row['id']] = (likeness, row)
+    now = datetime.now().isoformat(' ', 'seconds')
+    pushed = []
+    for _, row in found.values():
+        db.execute('INSERT INTO face_answers (face, photo, proposed, likeness, given, answered, pushed_by) '
+                   'VALUES (?, ?, ?, ?, ?, ?, ?)', (row['id'], row['photo'], row['proposed'],
+                                                    row['likeness'], given or '', now, face))
+        if given:
+            db.execute('UPDATE faces SET person = ?, sure = 1, likeness = NULL WHERE id = ?', (who, row['id']))
+        else:
+            banned = ','.join(filter(None, [row['banned'] or '', str(refused)]))
+            db.execute('UPDATE faces SET person = NULL, sure = 0, likeness = NULL, banned = ? WHERE id = ?',
+                       (banned, row['id']))
+        db.execute('UPDATE face_check SET answer = ?, answered = ? WHERE face = ? AND answer IS NULL',
+                   (given or '', now, row['id']))
+        pushed.append({'face': row['id'], 'person': given or ''})
+    return pushed
+
+
+def _moment(taken):
+    try:
+        return datetime.fromisoformat(taken)
+    except (TypeError, ValueError):
+        return None
 
 
 def _answer(db, face, person, born=None):
-    """keep what the photographer said of a face, without committing; its
-    photo, None for a face unknown"""
+    """keep what the photographer said of a face, without committing: {'photo',
+    'given', 'proposed': the person proposed if a name was}, None for a face
+    unknown"""
     row = db.execute('SELECT f.photo, f.person, f.sure, f.banned, f.likeness, p.name AS proposed '
                      'FROM faces f LEFT JOIN people p ON p.id = f.person WHERE f.id = ?',
                      (face,)).fetchone()
@@ -291,7 +384,8 @@ def _answer(db, face, person, born=None):
             refused = ','.join(filter(None, [refused, str(row['person'])]))
         db.execute('UPDATE faces SET person = NULL, sure = 0, likeness = NULL, banned = ? '
                    'WHERE id = ?', (refused, face))
-    return row['photo']
+    return {'photo': row['photo'], 'given': person,
+            'proposed': row['person'] if row['sure'] != 1 else None}
 
 
 #: the background recognise() of every face: whether one runs, and whether
@@ -354,11 +448,13 @@ def board(db, count=BOARD[0], person=''):
         return sum(known[row['who'], str(int(year) + by)] for by in (-1, 0, 1))
 
     waiting = [row for row in rows if not person or row['person'] == person]
+    # (one card for a person in a day: an answer goes for the rest of the moment)
     cards, seqs, years = [], set(), collections.Counter()
     for row in sorted(waiting, key=lambda row: (min(near(row), 6), -(row['likeness'] or 0))):
         seq, year = row['seq'] or row['photo'], (row['who'], (row['taken'] or '')[:4])
-        if seq not in seqs and years[year] < BOARD[1]:
-            seqs.add(seq)
+        day = (row['who'], (row['taken'] or '')[:10] or row['photo'])
+        if seq not in seqs and day not in seqs and years[year] < BOARD[1]:
+            seqs.update((seq, day))
             years[year] += 1
             cards.append({'face': row['face'], 'person': row['person'], 'likeness': row['likeness'],
                           'photo': row['photo'], 'year': year[1], 'near': near(row)})
