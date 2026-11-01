@@ -12,7 +12,9 @@ by its photo. recognise() compares every face without a name with the
 examples and proposes the person whose example is the most alike, when the
 likeness reaches GUESS. A proposed name is shown with a question mark until
 the photographer confirms or refuses it; only confirmed names are written
-into the files.
+into the files. Each answer is kept with the likeness it was given to
+(table face_answers), which says from what likeness a name can be trusted;
+draw_check() draws faces at random to measure that (table face_check).
 
 People change, children fast, and the photos of a family go back to before
 the children were born. So an example only speaks for the years around its
@@ -48,6 +50,12 @@ GUESS, CHAIN = 0.42, 0.52
 #:  named (13 people): the most alike face of another person reaches it for
 #:  1 % of them, the most alike face of the same person for 42 %
 CLEAR = 0.70
+#: the faces drawn for the photographer to check: this likeness at least, this
+#:  gap at least to the second name, this many. Replayed on 2026-10-31 on the
+#:  294 faces confirmed and 12 refused, no name was wrong in 48 at 0.85 or
+#:  more, 2 in 110 at 0.80 (the sisters, and faces of people not yet named):
+#:  too few to say how far 0.85 can be trusted, which these answers will
+CHECK = (0.85, 0.05, 150)
 
 _lock, _nets, _early = threading.Lock(), {}, threading.Lock()
 
@@ -229,10 +237,21 @@ def sync(db, photos):
 def name(db, face, person, born=None):
     """the photographer says who a face is (person: '' to take the name
     off, or to refuse the one proposed); the photos to show again"""
-    row = db.execute('SELECT photo, person, sure, banned FROM faces WHERE id = ?', (face,)).fetchone()
+    row = db.execute('SELECT f.photo, f.person, f.sure, f.banned, f.likeness, p.name AS proposed '
+                     'FROM faces f LEFT JOIN people p ON p.id = f.person WHERE f.id = ?',
+                     (face,)).fetchone()
     if row is None:
         return set()
     person = ' '.join((person or '').split())
+    # what was proposed and what the photographer said: its likeness goes
+    #   with the proposal, and this is the only place that remembers it
+    when = datetime.now().isoformat(' ', 'seconds')
+    db.execute('INSERT INTO face_answers (face, photo, proposed, likeness, given, answered) '
+               'VALUES (?, ?, ?, ?, ?, ?)',
+               (face, row['photo'], row['proposed'] if row['sure'] != 1 else None,
+                row['likeness'] if row['sure'] != 1 else None, person, when))
+    db.execute('UPDATE face_check SET answer = ?, answered = ? WHERE face = ? AND answer IS NULL',
+               (person, when, face))
     if person:
         db.execute('INSERT OR IGNORE INTO people (name) VALUES (?)', (person,))
         who = db.execute('SELECT id FROM people WHERE name = ?', (person,)).fetchone()['id']
@@ -290,6 +309,101 @@ def _later_job():
             pass            # (the next name given asks again)
         finally:
             db.close()
+
+
+def _rivals(db, faces):
+    """the likeness of the second name of proposed faces, {face id: the best
+    likeness with an example of somebody else, under the rules of recognise}"""
+    import numpy as np
+    rows = db.execute('SELECT id, photo, vector, taken, person, sure, likeness FROM faces '
+                      'WHERE person IS NOT NULL AND (sure = 1 OR likeness >= ?)', (CHAIN,)).fetchall()
+    born = {row['id']: _year(f"{row['born']}-07-01") if row['born'] else None
+            for row in db.execute('SELECT id, born FROM people')}
+    vectors = np.stack([np.frombuffer(row['vector'], dtype='float32') for row in rows])
+    years = [_year(row['taken']) for row in rows]
+    place = {row['id']: k for k, row in enumerate(rows)}
+    out = {}
+    for start in range(0, len(faces), 500):
+        part = [face for face in faces[start:start + 500] if face in place]
+        if not part:
+            continue
+        alike = vectors[[place[face] for face in part]] @ vectors.T
+        for a, face in enumerate(part):
+            k = place[face]
+            out[face] = 0.0
+            for e in np.argsort(-alike[a]):
+                likeness, other = float(alike[a, e]), rows[int(e)]['person']
+                if likeness < GUESS:
+                    break
+                if other == rows[k]['person'] or rows[int(e)]['photo'] == rows[k]['photo']:
+                    continue
+                if years[k] is not None and years[e] is not None:
+                    begin = born.get(other)
+                    if begin is not None and years[k] < begin - 0.3:
+                        continue
+                    age = None if begin is None else (years[k] + years[e]) / 2 - begin
+                    if abs(years[k] - years[e]) > reach(age):
+                        continue
+                out[face] = likeness
+                break
+    return out
+
+
+def draw_check(db, least=CHECK[0], gap=CHECK[1], count=CHECK[2]):
+    """draw at random, once, the proposed faces the photographer will check:
+    those that reach this likeness and this gap to the second name, one to a
+    sequence (the frames of a burst would say the same thing); how many
+    faces are drawn in all. The answers say how far such names can be trusted."""
+    import random
+    drawn = db.execute('SELECT COUNT(*) FROM face_check').fetchone()[0]
+    if drawn:
+        return drawn
+    rows = db.execute('SELECT f.id, f.likeness, p.name, ph.seq, f.photo FROM faces f '
+                      'JOIN people p ON p.id = f.person LEFT JOIN photos ph ON ph.name = f.photo '
+                      'WHERE f.sure != 1 AND f.likeness >= ?', (least,)).fetchall()
+    rivals = _rivals(db, [row['id'] for row in rows])
+    rows = [row for row in rows if row['likeness'] - rivals.get(row['id'], 0.0) >= gap]
+    random.shuffle(rows)
+    when, seen, kept = datetime.now().isoformat(' ', 'seconds'), set(), []
+    for row in rows:
+        seq = row['seq'] or row['photo']
+        if seq not in seen and len(kept) < count:
+            seen.add(seq)
+            kept.append((row['id'], when, row['name'], row['likeness'],
+                         row['likeness'] - rivals.get(row['id'], 0.0)))
+    db.executemany('INSERT INTO face_check (face, drawn, person, likeness, gap) VALUES (?, ?, ?, ?, ?)',
+                   kept)
+    db.commit()
+    return len(kept)
+
+
+def highest_error(wrong, count, level=0.95):
+    """the highest share of wrong names these answers leave plausible (the
+    one-sided bound of Clopper and Pearson); 1 without an answer"""
+    from math import comb
+    if not count:
+        return 1.0
+
+    def below(p):
+        return sum(comb(count, k) * p ** k * (1 - p) ** (count - k) for k in range(wrong + 1))
+
+    low, high = wrong / count, 1.0
+    for _ in range(50):
+        middle = (low + high) / 2
+        low, high = (middle, high) if below(middle) > 1 - level else (low, middle)
+    return high
+
+
+def check_status(db):
+    """the faces to check and what the answers say, for the page"""
+    cards = [dict(row) for row in db.execute(
+        'SELECT c.face, c.person, c.likeness, c.gap, c.answer, f.photo, f.x, f.y, f.w, f.h '
+        'FROM face_check c JOIN faces f ON f.id = c.face ORDER BY c.answer IS NOT NULL, c.face')]
+    said = [card for card in cards if card['answer'] is not None]
+    wrong = sum(1 for card in said if card['answer'] != card['person'])
+    return {'cards': cards, 'answered': len(said), 'wrong': wrong, 'least': CHECK[0], 'gap': CHECK[1],
+            'highest': highest_error(wrong, len(said)),
+            'kept': db.execute('SELECT COUNT(*) FROM face_answers').fetchone()[0]}
 
 
 def early(name, img, taken):

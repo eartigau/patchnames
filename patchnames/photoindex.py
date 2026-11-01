@@ -128,6 +128,10 @@ CREATE TABLE IF NOT EXISTS faces (id INTEGER PRIMARY KEY, photo TEXT, x REAL, y 
     h REAL, score REAL, vector BLOB, taken TEXT, person INTEGER, sure INTEGER DEFAULT 0,
     likeness REAL, banned TEXT);
 CREATE INDEX IF NOT EXISTS faces_photo ON faces (photo);
+CREATE TABLE IF NOT EXISTS face_answers (id INTEGER PRIMARY KEY, face INTEGER, photo TEXT,
+    proposed TEXT, likeness REAL, given TEXT, answered TEXT);
+CREATE TABLE IF NOT EXISTS face_check (face INTEGER PRIMARY KEY, drawn TEXT, person TEXT,
+    likeness REAL, gap REAL, answer TEXT, answered TEXT);
 """
 
 #: the kinds of tags, and the column of a photo each comes from
@@ -300,6 +304,11 @@ def _image_path(kind, name):
 
 def thumb_path(name):
     return _image_path('thumbs', name)
+
+
+def face_path(face):
+    """a face cut out of its photo, for the panel of the faces to check"""
+    return os.path.join(index_dir(), 'face_crops', f'{int(face)}.jpg')
 
 
 def preview_path(name):
