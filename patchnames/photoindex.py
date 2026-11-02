@@ -190,6 +190,9 @@ def connect():
         #   were those without a checklist
         with db:
             db.execute("UPDATE photos SET own_position = 1 WHERE match = 'gps'")
+    # (a table of the faces made before it said how a name stands on the confirmed)
+    if 'anchor' not in {row['name'] for row in db.execute('PRAGMA table_info(faces)')}:
+        db.execute('ALTER TABLE faces ADD COLUMN anchor REAL')
     # (a table of the faces made before it said what a push came from)
     if 'pushed_by' not in {row['name'] for row in db.execute('PRAGMA table_info(face_answers)')}:
         db.execute('ALTER TABLE face_answers ADD COLUMN pushed_by INTEGER')

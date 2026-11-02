@@ -46,12 +46,17 @@ FACE, SMALL = 0.85, 36
 #: likeness (cosine of the two vectors) from which a name is proposed, and
 #:  from which a proposed face becomes an example for others; OpenCV gives
 #:  0.363 as the limit of "the same person" for SFace
-GUESS, CHAIN = 0.42, 0.52
-#: and from which the page says a proposed name is very clear ("très
-#:  probable"). Measured on 2026-10-24 on the 151 faces the photographer had
-#:  named (13 people): the most alike face of another person reaches it for
-#:  1 % of them, the most alike face of the same person for 42 %
-CLEAR = 0.70
+GUESS, CHAIN = 0.42, 0.75
+#: when the page says a proposed name is very clear ("très probable"): the
+#:  likeness to a face the photographer confirmed (not to a chain of proposals)
+#:  from which it does, up to each age; None: never at that age, where children
+#:  look alike to the model. Chosen on 2026-11-01 on 1500 answers (2 % of names
+#:  wrong), checked on 1500 others (1 wrong in 269)
+CLEAR = ((3, 0.60), (8, None), (16, 0.60), (200, 0.75))
+#: the same when the age of the person is not known
+CLEAR_AGELESS = 0.60
+#: the version of these rules: the proposals are made again when it changes
+RULES = '2'
 #: the faces drawn for the photographer to check: this likeness at least, this
 #:  gap at least to the second name, this many. Replayed on 2026-10-31 on the
 #:  294 faces confirmed and 12 refused, no name was wrong in 48 at 0.85 or
@@ -139,6 +144,30 @@ def reach(age):
     return 1.0 if age < 3 else 2.0 if age < 8 else 3.0 if age < 16 else 6.0 if age < 25 else 12.0
 
 
+def is_clear(anchor, taken, born):
+    """whether a proposed name is very clear (see CLEAR); anchor: its likeness
+    to a confirmed face of that person, taken: the date of the photo, born: the
+    year of birth written"""
+    if anchor is None:
+        return False
+    age = _age(_year(taken), _year(f'{born}-07-01') if born else None)
+    if age is None:
+        return anchor >= CLEAR_AGELESS
+    least = next((least for upto, least in CLEAR if age < upto), CLEAR[-1][1])
+    return least is not None and anchor >= least
+
+
+def rules_changed(db):
+    """whether the proposals were made under other rules (see RULES)"""
+    row = db.execute("SELECT value FROM meta WHERE key = 'face_rules'").fetchone()
+    return (row[0] if row else None) != RULES
+
+
+def _age(year, born):
+    """the age of a person at a date, in years; None if not known"""
+    return None if year is None or born is None else year - born
+
+
 def _year(taken):
     try:
         when = datetime.fromisoformat(taken)
@@ -208,14 +237,35 @@ def recognise(db, photos=None):
         if fresh == last:
             break
         guess, last = {**fixed, **fresh}, fresh
+    # how far each name stands on faces the photographer confirmed, not on a
+    #   chain of proposals: what says it can be trusted
+    anchors = {}
+    named_who = np.array([rows[k]['person'] or 0 for k in named])
+    asked = [k for k in unknown if k in guess]
+    for start in range(0, len(asked), 2000):
+        part = asked[start:start + 2000]
+        alike = vectors[part] @ vectors[named].T if named else None
+        for a, k in enumerate(part):
+            person = guess[k][0]
+            for b in np.where(named_who == person)[0][np.argsort(-alike[a][named_who == person])] if named else ():
+                e = named[int(b)]
+                if rows[e]['photo'] == rows[k]['photo']:
+                    continue
+                if years[k] is not None and years[e] is not None:
+                    begin = born.get(person)
+                    age = None if begin is None else (years[k] + years[e]) / 2 - begin
+                    if abs(years[k] - years[e]) > reach(age):
+                        continue
+                anchors[k] = float(alike[a, b])
+                break
     changed = set()
     for k in unknown:
         person, likeness = guess.get(k, (None, None))
         if person != rows[k]['person']:
             changed.add(rows[k]['photo'])
         # (a face the photographer named meanwhile keeps its name)
-        db.execute('UPDATE faces SET person = ?, likeness = ?, sure = 0 WHERE id = ? AND sure != 1',
-                   (person, likeness, rows[k]['id']))
+        db.execute('UPDATE faces SET person = ?, likeness = ?, anchor = ?, sure = 0 '
+                   'WHERE id = ? AND sure != 1', (person, likeness, anchors.get(k), rows[k]['id']))
     db.commit()
     return changed
 
@@ -419,6 +469,7 @@ def _later_job():
         db = photoindex.connect()
         try:
             sync(db, recognise(db))
+            photoindex.set_meta(db, 'face_rules', RULES)
         except Exception:
             pass            # (the next name given asks again)
         finally:
@@ -594,10 +645,12 @@ def renamed(db, names):
 
 def of_photo(db, name):
     """the faces of a photo, from left to right, as the page gets them: a
-    proposed name is 'clear' when its likeness reaches CLEAR"""
-    return [dict(row, clear=row['sure'] != 1 and (row['likeness'] or 0) >= CLEAR)
+    proposed name is 'clear' as is_clear says"""
+    return [dict(row, clear=row['sure'] != 1 and bool(row['person'])
+                 and is_clear(row['anchor'], row['taken'], row['born']))
             for row in db.execute(
-                'SELECT f.id, f.x, f.y, f.w, f.h, f.sure, f.likeness, p.name AS person, p.born '
+                'SELECT f.id, f.x, f.y, f.w, f.h, f.sure, f.likeness, f.anchor, f.taken, '
+                'p.name AS person, p.born '
                 'FROM faces f LEFT JOIN people p ON p.id = f.person WHERE f.photo = ? ORDER BY f.x',
                 (name,))]
 
@@ -606,21 +659,22 @@ def of_sequence(db, name):
     """the people of the sequence of a photo, as the page shows them: one
     entry a person, {'person', 'sure': a face of it named or confirmed by
     the photographer, 'likeness': the best of its proposed faces (None when
-    sure), 'clear': that likeness reaches CLEAR, 'frame': the photo of that
+    sure), 'clear': that face is very clear (is_clear), 'frame': the photo of that
     face}, the sure first, then the most alike"""
     row = db.execute('SELECT seq FROM photos WHERE name = ?', (name,)).fetchone()
     frames = [r['name'] for r in db.execute('SELECT name FROM photos WHERE seq = ?',
                                             (row['seq'],))] if row and row['seq'] else [name]
     marks = ', '.join('?' * len(frames))
     found = {}
-    for face in db.execute(f'SELECT p.name AS person, f.sure, f.likeness, f.photo FROM faces f '
+    for face in db.execute(f'SELECT p.name AS person, p.born, f.sure, f.likeness, f.anchor, f.taken, f.photo FROM faces f '
                            f'JOIN people p ON p.id = f.person WHERE f.photo IN ({marks})', frames):
         sure, likeness = face['sure'] == 1, face['likeness'] or 0.0
         best = found.get(face['person'])
         if best is None or (sure, likeness) > (best['sure'], best['likeness'] or 0.0):
             found[face['person']] = {'person': face['person'], 'sure': sure,
                                      'likeness': None if sure else round(likeness, 3),
-                                     'clear': not sure and likeness >= CLEAR, 'frame': face['photo']}
+                                     'clear': not sure and is_clear(face['anchor'], face['taken'], face['born']),
+                                     'frame': face['photo']}
     return sorted(found.values(), key=lambda who: (not who['sure'], -(who['likeness'] or 0.0)))
 
 
