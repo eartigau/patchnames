@@ -9,12 +9,14 @@ page nobody looks at (it listens on that machine only), and the files are
 written where they are.
 
     python -m patchnames.worker status
-    python -m patchnames.worker start [--until 11:00] [--jobs 6]
+    python -m patchnames.worker start [--until 'samedi 11:00'] [--jobs 8]
     python -m patchnames.worker fetch
     python -m patchnames.worker stop
 
 start stops the batch of this machine (a sequence is never asked twice),
-sends a copy of the index and starts the batch there. fetch brings back here
+sends a copy of the index and starts the batch there; --until stops it hard
+at the next time the clock says so, today or tomorrow (the weekly credits
+start again at a fixed hour: no call goes past it). fetch brings back here
 what it described: the rows of the sequences whose files it has finished
 writing, and their images. The index of this machine stays the one that is
 searched: a sequence described here since, or whose species the photographer
@@ -31,7 +33,7 @@ import subprocess
 import sys
 import time
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from . import config as _config_module
 from . import photoindex
@@ -39,6 +41,7 @@ from . import sync
 
 #: where things are on the worker, under its home
 CODE, INDEX, PORT = 'patchnames', 'patchdoc', 8765
+DAYS = ('lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche')
 ENV = 'export PATH="$HOME/.local/bin:$PATH"; '
 SSH = ['ssh', '-oBatchMode=yes', '-oConnectTimeout=20']
 #: what a row of the worker may not change here
@@ -53,6 +56,36 @@ rows = db.execute("SELECT * FROM photos WHERE seq IN (SELECT seq FROM photos WHE
 refused = db.execute("SELECT name, why FROM refused WHERE kind = 'write'").fetchall()
 json.dump({'rows': [dict(row) for row in rows], 'refused': {row['name']: row['why'] for row in refused}},
           sys.stdout)
+"""
+#: the hard stop on the worker, at @TARGET@ (seconds since 1970): its server
+#:  goes first, so that the calls killed are not counted as failed sequences,
+#:  then every claude call; the server comes back with no queue, to finish
+#:  writing the files
+STOP = """#!/bin/bash
+export PATH="$HOME/.local/bin:$PATH"
+now=$(date +%s); target=@TARGET@
+[ "$target" -gt "$now" ] && sleep $((target - now))
+echo "$(date +%T) arrêt"
+curl -s -m 15 -X POST -H 'X-Patchdoc: 1' -H 'Content-Type: application/json' -d '{}' http://127.0.0.1:@PORT@/api/batch/stop; echo
+pkill -TERM -f 'patchnames\\.doc gui --port @PORT@'
+for k in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    n=$(pgrep -c -f '[c]laude -p')
+    echo "$(date +%T) processus claude -p : $n"
+    [ "$n" -gt 0 ] && pkill -TERM -f '[c]laude -p'
+    sleep 5
+done
+pkill -KILL -f '[c]laude -p'
+python3 - <<'PY'
+import os, sqlite3
+db = sqlite3.connect(os.path.expanduser('~/@INDEX@/photos.sqlite'), timeout=60)
+db.execute("DELETE FROM meta WHERE key = 'batch_archive'")
+db.commit()
+print('file effacée de la base ; à écrire :', db.execute("SELECT COUNT(DISTINCT seq) FROM photos WHERE written = 'pending'").fetchone()[0])
+PY
+cd ~/@CODE@
+PYTHONPATH=. setsid nohup python3 -m patchnames.doc gui --port @PORT@ --no-browser --no-vignettes >> ~/@INDEX@/serveur.log 2>&1 < /dev/null &
+sleep 12
+echo "$(date +%T) processus claude -p après redémarrage : $(pgrep -c -f '[c]laude -p')"
 """
 
 
@@ -143,12 +176,32 @@ def _send(host):
     os.remove(copy)
 
 
+def _end(until):
+    """the next time the clock says until: 'HH:MM' today, or tomorrow once
+    that hour is past; 'samedi 11:00' the next Saturday at that hour; or
+    'YYYY-MM-DD HH:MM'"""
+    now, (day, _, hour) = datetime.now(), until.strip().rpartition(' ')
+    if day[:1].isdigit():
+        return datetime.strptime(until.strip(), '%Y-%m-%d %H:%M')
+    end = datetime.combine(now.date(), datetime.strptime(hour, '%H:%M').time())
+    if day:
+        end += timedelta(days=(DAYS.index(day.lower()) - now.weekday()) % 7)
+    return end if end > now else end + timedelta(days=7 if day else 1)
+
+
 def start(until=None, jobs=None):
     host = host_of()
     if not logged_in(host):
         print(f"Claude n'est pas connecté sur {host} : ssh -t {host} '~/.local/bin/claude auth login'")
         return 1
-    if _running(host) is not None:
+    state = _running(host)
+    # (a server left with nothing to do, after a stop: it starts again from the index of here)
+    if state is not None and not (state.get('active') or state.get('waiting')
+                                  or (state.get('writes') or {}).get('waiting')):
+        print(f'Le serveur de {host} tourne sans file : il repart de la base de cette machine.')
+        ssh(host, f"pkill -TERM -f 'patchnames\\.doc gui --port {PORT}'; sleep 4")
+        state = None
+    if state is not None:
         print(f'Le serveur de {host} tourne déjà.')
     else:
         print('Arrêt de la file de cette machine...')
@@ -169,12 +222,14 @@ def start(until=None, jobs=None):
                   f"config.save({{'doc_batch_jobs': {int(jobs)}}})\"")
     print('File :', _post(host, '/api/batch', '{"all": true}').decode()[:200])
     if until:
-        end = datetime.combine(datetime.now().date(), datetime.strptime(until, '%H:%M').time())
+        end = _end(until)
+        script = (STOP.replace('@TARGET@', str(int(end.timestamp()))).replace('@PORT@', str(PORT))
+                  .replace('@CODE@', CODE).replace('@INDEX@', INDEX))
+        # (one stop at a time: the one of an earlier start goes)
+        ssh(host, f"pkill -f '{INDEX}/arret[.]sh'; cat > ~/{INDEX}/arret.sh && chmod +x ~/{INDEX}/arret.sh && "
+                  f"setsid nohup ~/{INDEX}/arret.sh > ~/{INDEX}/arret.log 2>&1 < /dev/null &", data=script.encode())
         wait = int((end - datetime.now()).total_seconds())
-        ssh(host, f"setsid nohup sh -c 'sleep {max(wait, 1)}; curl -s -m 120 -X POST -H \"X-Patchdoc: 1\" "
-                  f"-H \"Content-Type: application/json\" -d {{}} http://127.0.0.1:{PORT}/api/batch/stop' "
-                  f'> ~/{INDEX}/arret.log 2>&1 < /dev/null &')
-        print(f'Arrêt prévu à {until} (dans {wait // 60} min).')
+        print(f"Arrêt net le {end:%d/%m à %H:%M} (dans {wait // 3600} h {wait % 3600 // 60:02d}).")
     return status(host)
 
 
@@ -248,7 +303,9 @@ def main():
     parser = argparse.ArgumentParser(prog='python -m patchnames.worker',
                                      description="La file de l'archive, sur le serveur de l'archive.")
     parser.add_argument('what', choices=('status', 'start', 'fetch', 'stop'))
-    parser.add_argument('--until', metavar='HH:MM', help="Arrêter la file à cette heure aujourd'hui.")
+    parser.add_argument('--until', metavar="'[jour] HH:MM'",
+                        help="Arrêter net à cette heure : aujourd'hui, ou demain si elle est passée ; "
+                             "'samedi 11:00' le prochain samedi ; ou 'AAAA-MM-JJ HH:MM'.")
     parser.add_argument('--jobs', type=int, help='Séquences en même temps là-bas.')
     args = parser.parse_args()
     if args.what == 'start':
