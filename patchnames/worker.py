@@ -11,7 +11,7 @@ written where they are.
     python -m patchnames.worker status
     python -m patchnames.worker start [--until 'samedi 11:00'] [--jobs 8]
     python -m patchnames.worker fetch
-    python -m patchnames.worker stop
+    python -m patchnames.worker stop [--until 'vendredi 16:00']
 
 start stops the batch of this machine (a sequence is never asked twice),
 sends a copy of the index and starts the batch there; --until stops it hard
@@ -222,19 +222,34 @@ def start(until=None, jobs=None):
                   f"config.save({{'doc_batch_jobs': {int(jobs)}}})\"")
     print('File :', _post(host, '/api/batch', '{"all": true}').decode()[:200])
     if until:
-        end = _end(until)
-        script = (STOP.replace('@TARGET@', str(int(end.timestamp()))).replace('@PORT@', str(PORT))
-                  .replace('@CODE@', CODE).replace('@INDEX@', INDEX))
-        # (one stop at a time: the one of an earlier start goes)
-        ssh(host, f"pkill -f '{INDEX}/arret[.]sh'; cat > ~/{INDEX}/arret.sh && chmod +x ~/{INDEX}/arret.sh && "
-                  f"setsid nohup ~/{INDEX}/arret.sh > ~/{INDEX}/arret.log 2>&1 < /dev/null &", data=script.encode())
-        wait = int((end - datetime.now()).total_seconds())
-        print(f"Arrêt net le {end:%d/%m à %H:%M} (dans {wait // 3600} h {wait % 3600 // 60:02d}).")
+        _stop_at(host, _end(until))
     return status(host)
 
 
-def stop(host=None):
+def _stop_at(host, end):
+    """the hard stop of the worker at that time (see STOP)"""
+    script = (STOP.replace('@TARGET@', str(int(end.timestamp()))).replace('@PORT@', str(PORT))
+              .replace('@CODE@', CODE).replace('@INDEX@', INDEX))
+    # (one stop at a time: the one of an earlier start goes. Alone in its
+    #   call, whose shell would match the pattern if it named the script)
+    ssh(host, "pkill -f '[a]rret[.]sh'")
+    # (the file first: in a list put in the background, cat would read nothing)
+    ssh(host, f"cat > ~/{INDEX}/arret.sh; chmod +x ~/{INDEX}/arret.sh; "
+              f"setsid nohup ~/{INDEX}/arret.sh > ~/{INDEX}/arret.log 2>&1 < /dev/null &", data=script.encode())
+    if 'arret.sh' not in ssh(host, "pgrep -af '[a]rret[.]sh'").stdout.decode():
+        print("L'arrêt n'a pas pu être posé là-bas : arrêtez la file avec `python -m patchnames.worker stop`.")
+        return 1
+    wait = int((end - datetime.now()).total_seconds())
+    print(f"Arrêt net le {end:%d/%m à %H:%M} (dans {wait // 3600} h {wait % 3600 // 60:02d}).")
+    return 0
+
+
+def stop(host=None, until=None):
+    """stop the batch of the worker now (the sequences under way finish), or
+    move its hard stop to until"""
     host = host or host_of()
+    if until:
+        return _stop_at(host, _end(until))
     print(_post(host, '/api/batch/stop').decode()[:200])
     return 0
 
@@ -310,6 +325,8 @@ def main():
     args = parser.parse_args()
     if args.what == 'start':
         return start(args.until, args.jobs)
+    if args.what == 'stop':
+        return stop(until=args.until)
     return {'status': status, 'fetch': fetch, 'stop': stop}[args.what]()
 
 
