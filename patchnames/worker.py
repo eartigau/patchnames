@@ -146,7 +146,7 @@ def _stop_here():
 
 
 def _send(host):
-    """the code, the explanations, the eBird data and a copy of the index"""
+    """the code, the explanations, the eBird data, its bar charts and a copy of the index"""
     root = os.path.dirname(os.path.abspath(__file__))
     cfg = _config_module.load()
     rsync = [sync._rsync()[0], '-rtz', '-e', ' '.join(SSH)]
@@ -157,6 +157,10 @@ def _send(host):
                    capture_output=True)
     subprocess.run(rsync + [os.path.expanduser(cfg['ebird_dir']) + '/', f'{host}:.config/patchnames/ebird/'],
                    check=True, capture_output=True)
+    # (the bar charts of eBird, that say which birds are rare: kept with the index)
+    charts = os.path.join(photoindex.index_dir(), 'ebird') + '/'
+    if os.path.isdir(charts):
+        subprocess.run(rsync + [charts, f'{host}:{INDEX}/ebird/'], check=True, capture_output=True)
     copy = os.path.join(photoindex.index_dir(), 'photos.pour_serveur.sqlite')
     if os.path.exists(copy):
         os.remove(copy)
